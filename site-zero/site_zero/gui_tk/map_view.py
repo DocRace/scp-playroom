@@ -7,12 +7,55 @@ import asyncio
 import math
 import threading
 import tkinter as tk
+import tkinter.ttk as ttk
 from pathlib import Path
 from typing import Any
 
 from site_zero.settings import AppSettings, load_settings
 from site_zero.world.layout import room_graph_for_meta
 from site_zero.world_state import MemoryWorldState, WorldStateStore, connect_world_state
+
+
+def _truncate_cell(s: str, max_len: int = 96) -> str:
+    t = str(s).replace("\n", " ").strip()
+    if len(t) <= max_len:
+        return t
+    return t[: max_len - 1] + "…"
+
+
+def _life_status_line(ent: dict[str, Any]) -> str:
+    """Short English label for roster panel (alive / dead / active)."""
+    k = ent.get("kind")
+    alive = ent.get("alive")
+    if k == "d_class":
+        return "alive" if alive is not False else "DEAD"
+    if k == "scp":
+        if alive is False:
+            return "DEAD"
+        if alive is True:
+            return "alive"
+        return "active"
+    return "—"
+
+
+def _status_row_tag(status_text: str) -> str:
+    """Treeview row tag for ``tag_configure`` (foreground/background)."""
+    s = str(status_text).strip().lower()
+    if s == "dead":
+        return "st_dead"
+    if s == "alive":
+        return "st_alive"
+    if s == "active":
+        return "st_active"
+    return "st_muted"
+
+
+def _apply_roster_row_tags(tree: ttk.Treeview) -> None:
+    """Distinct row colors per status (clam theme)."""
+    tree.tag_configure("st_alive", background="#0f2818", foreground="#8ee5b0")
+    tree.tag_configure("st_dead", background="#2a1518", foreground="#f0a8a8")
+    tree.tag_configure("st_active", background="#141a2e", foreground="#a8c4ff")
+    tree.tag_configure("st_muted", background="#0f0f1a", foreground="#7a7a8a")
 
 
 def _stable_color(eid: str) -> str:
@@ -116,30 +159,104 @@ class SiteMapApp:
         )
         self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        panel = tk.Frame(body, bg="#16213e", width=300)
-        panel.pack(side=tk.RIGHT, fill=tk.Y, padx=(8, 0))
+        panel = tk.Frame(body, bg="#16213e", width=720)
+        panel.pack(side=tk.RIGHT, fill=tk.Y, expand=False, padx=(8, 0))
         panel.pack_propagate(False)
 
         tk.Label(
             panel,
-            text="Agents — last action (SCP + D-class)",
+            text="Roster  ·  SCP | D-class  ·  drag center divider  ·  20× D-9001–9020",
             fg="#eaeaea",
             bg="#16213e",
-            font=("Helvetica", 11, "bold"),
-        ).pack(anchor="w", padx=8, pady=(8, 4))
+            font=("Helvetica", 9, "bold"),
+        ).pack(anchor="w", padx=6, pady=(6, 2))
 
-        self.txt = tk.Text(
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure(
+            "SZ.Treeview",
+            background="#0f0f1a",
+            fieldbackground="#0f0f1a",
+            foreground="#c8c8d0",
+            font=("Helvetica", 8),
+            rowheight=18,
+        )
+        style.configure(
+            "SZ.Treeview.Heading",
+            background="#243054",
+            foreground="#eaeaea",
+            font=("Helvetica", 9, "bold"),
+        )
+        style.map("SZ.Treeview", background=[("selected", "#3d5580")], foreground=[("selected", "#ffffff")])
+
+        def _make_roster_tree(parent: tk.Frame, heading: str) -> ttk.Treeview:
+            tk.Label(
+                parent,
+                text=heading,
+                fg="#b8c8e8",
+                bg="#16213e",
+                font=("Helvetica", 9, "bold"),
+            ).pack(anchor="w", pady=(0, 1))
+            wrap = tk.Frame(parent, bg="#16213e")
+            wrap.pack(fill=tk.BOTH, expand=True)
+            scroll = ttk.Scrollbar(wrap)
+            scroll.pack(side=tk.RIGHT, fill=tk.Y)
+            cols = ("id", "status", "room", "pos", "last")
+            tree = ttk.Treeview(
+                wrap,
+                columns=cols,
+                show="headings",
+                style="SZ.Treeview",
+                yscrollcommand=scroll.set,
+                height=24,
+            )
+            tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            scroll.config(command=tree.yview)
+            # Compact widths so two panes fit side-by-side (~320px each at default sash).
+            tree.column("id", width=76, minwidth=60, stretch=False, anchor="w")
+            tree.column("status", width=42, minwidth=36, stretch=False, anchor="center")
+            tree.column("room", width=62, minwidth=48, stretch=True, anchor="w")
+            tree.column("pos", width=44, minwidth=40, stretch=False, anchor="e")
+            tree.column("last", width=72, minwidth=48, stretch=True, anchor="w")
+            tree.heading("id", text="ID")
+            tree.heading("status", text="Stat")
+            tree.heading("room", text="Room")
+            tree.heading("pos", text="x,y")
+            tree.heading("last", text="Last")
+            _apply_roster_row_tags(tree)
+            return tree
+
+        paned = tk.PanedWindow(
             panel,
-            width=36,
-            height=32,
+            orient=tk.HORIZONTAL,
+            bg="#16213e",
+            sashwidth=6,
+            sashrelief=tk.FLAT,
+            bd=0,
+        )
+        paned.pack(fill=tk.BOTH, expand=True, padx=2, pady=(0, 6))
+
+        col_left = tk.Frame(paned, bg="#16213e")
+        col_right = tk.Frame(paned, bg="#16213e")
+        paned.add(col_left, minsize=268, stretch="always")
+        paned.add(col_right, minsize=268, stretch="always")
+
+        self.tree_scp = _make_roster_tree(col_left, "SCP")
+        self.tree_d = _make_roster_tree(col_right, "D-class")
+
+        self.txt_help = tk.Text(
+            panel,
+            height=5,
             bg="#0f0f1a",
-            fg="#c8c8d0",
-            font=("Courier", 10),
+            fg="#8899bb",
+            font=("Helvetica", 9),
             wrap=tk.WORD,
             highlightthickness=0,
             borderwidth=0,
         )
-        self.txt.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 8))
 
         self._room_rects: dict[str, tuple[float, float, float, float]] = {}
         self._poll_ms = 200
@@ -158,14 +275,20 @@ class SiteMapApp:
                 text="In-memory store — use Redis + second terminal, or run with --live.",
             )
             self.canvas.delete("all")
-            self.txt.delete("1.0", tk.END)
-            self.txt.insert(
+            for tr in (self.tree_scp, self.tree_d):
+                for iid in tr.get_children():
+                    tr.delete(iid)
+            self.txt_help.pack(fill=tk.X, padx=6, pady=(0, 6))
+            self.txt_help.delete("1.0", tk.END)
+            self.txt_help.insert(
                 tk.END,
                 "Map needs world data.\n\n"
                 "• Redis: run `python -m site_zero` in another terminal, then `--gui`.\n"
                 "• Or one process: `python -m site_zero --live`\n",
             )
             return
+
+        self.txt_help.pack_forget()
 
         if self._shared_memory_with_sim:
             self.lbl_warn.config(text="Embedded sim — shared memory (no Redis)")
@@ -224,22 +347,29 @@ class SiteMapApp:
             if e:
                 entities[eid] = e
 
-        scp_lines: list[str] = []
-        d_lines: list[str] = []
+        scp_rows: list[tuple[tuple[str, str, str, str, str], str]] = []
+        d_rows: list[tuple[tuple[str, str, str, str, str], str]] = []
         for eid in sorted(entities):
             ent = entities[eid]
             loc = ent.get("location") or {}
             room = str(loc.get("room", "?"))
-            last = (meta.get("last_status") or {}).get(eid, "—")
+            last_raw = str((meta.get("last_status") or {}).get(eid, "—"))
+            st = _life_status_line(ent)
+            x, y = float(loc.get("x", 0)), float(loc.get("y", 0))
+            pos_s = f"{x:.1f},{y:.1f}"
+            last_cell = _truncate_cell(last_raw, 52)
+            row_vals = (eid, st, room, pos_s, last_cell)
+            tag = _status_row_tag(st)
             if ent.get("kind") == "scp":
-                x, y = float(loc.get("x", 0)), float(loc.get("y", 0))
-                scp_lines.append(f"{eid}\n  room {room} @ ({x:.1f},{y:.1f})\n  {last}\n")
+                scp_rows.append((row_vals, tag))
             elif str(eid).startswith("D-") and ent.get("kind") == "d_class":
-                short_last = str(last).replace("\n", " ")[:100]
-                d_lines.append(f"{eid}  [{room}]  {short_last}")
+                d_rows.append((row_vals, tag))
 
+        for eid, ent in sorted(entities.items()):
             if ent.get("kind") != "scp":
                 continue
+            loc = ent.get("location") or {}
+            room = str(loc.get("room", "?"))
             x, y = float(loc.get("x", 0)), float(loc.get("y", 0))
             rect = self._room_rects.get(room)
             if rect:
@@ -260,15 +390,34 @@ class SiteMapApp:
             label = eid.replace("SCP-", "").replace("____", "..")[:12]
             self.canvas.create_text(mx + 12, my, text=label, fill="#e0e0e8", anchor="w", font=("Helvetica", 9))
 
-        self.txt.delete("1.0", tk.END)
-        blocks: list[str] = []
-        if scp_lines:
-            blocks.append("--- SCP ---\n" + "\n".join(scp_lines))
-        else:
-            blocks.append("(no SCP entities)")
-        if d_lines:
-            blocks.append("--- D-class ---\n" + "\n".join(sorted(d_lines)[:32]))
-        self.txt.insert(tk.END, "\n\n".join(blocks))
+        for eid, ent in sorted(entities.items()):
+            if ent.get("kind") != "d_class" or not str(eid).startswith("D-"):
+                continue
+            loc = ent.get("location") or {}
+            room = str(loc.get("room", "?"))
+            x, y = float(loc.get("x", 0)), float(loc.get("y", 0))
+            rect = self._room_rects.get(room)
+            if not rect:
+                continue
+            x0, y0, x1, y1 = rect
+            mx = (x0 + x1) / 2 + max(-16, min(16, (x - 5) * 3.2))
+            my = (y0 + y1) / 2 + max(-10, min(10, (y - 5) * 3.2))
+            alive = ent.get("alive", True) is not False
+            fill = "#4a6fa5" if alive else "#3d2020"
+            outline = "#88aacc" if alive else "#cc4444"
+            rd = 4
+            self.canvas.create_rectangle(
+                mx - rd, my - rd, mx + rd, my + rd,
+                fill=fill,
+                outline=outline,
+                width=1,
+            )
+
+        for tree, rows in ((self.tree_scp, scp_rows), (self.tree_d, d_rows)):
+            for iid in tree.get_children():
+                tree.delete(iid)
+            for row_vals, tag in rows:
+                tree.insert("", tk.END, values=row_vals, tags=(tag,))
         try:
             self.root.update_idletasks()
         except tk.TclError:
@@ -280,7 +429,7 @@ def run_gui(*, config_path: Path | None = None) -> None:
     store = connect_world_state(settings.redis.url, settings.redis.enabled)
     root = tk.Tk()
     SiteMapApp(root, store, settings)
-    root.minsize(880, 600)
+    root.minsize(1240, 620)
     root.mainloop()
 
 
@@ -307,7 +456,7 @@ def run_gui_live(
     threading.Thread(target=sim_loop, name="site-zero-sim", daemon=True).start()
     root = tk.Tk()
     SiteMapApp(root, shared, settings, shared_memory_with_sim=True)
-    root.minsize(880, 600)
+    root.minsize(1240, 620)
     root.mainloop()
 
 
