@@ -103,7 +103,7 @@ class SiteMapApp:
 
         tk.Label(
             panel,
-            text="SCP — position & last action",
+            text="Agents — last action (SCP + D-class)",
             fg="#eaeaea",
             bg="#16213e",
             font=("Helvetica", 11, "bold"),
@@ -123,7 +123,7 @@ class SiteMapApp:
         self.txt.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 8))
 
         self._room_rects: dict[str, tuple[float, float, float, float]] = {}
-        self._poll_ms = 280
+        self._poll_ms = 200
         self.root.after(self._poll_ms, self._refresh)
 
     def _refresh(self) -> None:
@@ -155,7 +155,11 @@ class SiteMapApp:
 
         meta = self.store.get_meta()
         tick = meta.get("sim_tick", "—")
-        self.lbl_tick.config(text=f"tick: {tick}  ·  {self.settings.simulation.site_id}")
+        phase = str(meta.get("tick_phase", "") or "").strip()
+        phase_s = f" · {phase}" if phase else ""
+        self.lbl_tick.config(
+            text=f"tick: {tick}{phase_s}  ·  {self.settings.simulation.site_id}",
+        )
 
         graph = room_graph_for_meta(meta)
         cw = int(self.canvas.winfo_width() or 720)
@@ -202,16 +206,22 @@ class SiteMapApp:
                 entities[eid] = e
 
         scp_lines: list[str] = []
+        d_lines: list[str] = []
         for eid in sorted(entities):
             ent = entities[eid]
-            if ent.get("kind") != "scp":
-                continue
             loc = ent.get("location") or {}
             room = str(loc.get("room", "?"))
-            x, y = float(loc.get("x", 0)), float(loc.get("y", 0))
             last = (meta.get("last_status") or {}).get(eid, "—")
-            scp_lines.append(f"{eid}\n  room {room} @ ({x:.1f},{y:.1f})\n  {last}\n")
+            if ent.get("kind") == "scp":
+                x, y = float(loc.get("x", 0)), float(loc.get("y", 0))
+                scp_lines.append(f"{eid}\n  room {room} @ ({x:.1f},{y:.1f})\n  {last}\n")
+            elif str(eid).startswith("D-") and ent.get("kind") == "d_class":
+                short_last = str(last).replace("\n", " ")[:100]
+                d_lines.append(f"{eid}  [{room}]  {short_last}")
 
+            if ent.get("kind") != "scp":
+                continue
+            x, y = float(loc.get("x", 0)), float(loc.get("y", 0))
             rect = self._room_rects.get(room)
             if rect:
                 x0, y0, x1, y1 = rect
@@ -232,7 +242,18 @@ class SiteMapApp:
             self.canvas.create_text(mx + 12, my, text=label, fill="#e0e0e8", anchor="w", font=("Helvetica", 9))
 
         self.txt.delete("1.0", tk.END)
-        self.txt.insert(tk.END, "\n".join(scp_lines) if scp_lines else "(no SCP entities)")
+        blocks: list[str] = []
+        if scp_lines:
+            blocks.append("--- SCP ---\n" + "\n".join(scp_lines))
+        else:
+            blocks.append("(no SCP entities)")
+        if d_lines:
+            blocks.append("--- D-class ---\n" + "\n".join(sorted(d_lines)[:32]))
+        self.txt.insert(tk.END, "\n\n".join(blocks))
+        try:
+            self.root.update_idletasks()
+        except tk.TclError:
+            pass
 
 
 def run_gui(*, config_path: Path | None = None) -> None:

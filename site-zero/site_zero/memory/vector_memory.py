@@ -34,8 +34,11 @@ def events_to_snippet(rows: list[dict[str, Any]], max_len: int = 600) -> str:
 
 class VectorAgentMemory:
     """
-    One Chroma collection per agent_id. Writes are short natural-language traces;
-    recall uses the same Ollama embed model for query and documents.
+    One Chroma collection per agent_id (sanitized name `m_{agent_id}`).
+
+    Used for: each D-class id, SCP-079, SCP-173, and every roster SCP tick (049, 096, …)
+    so episodic traces stay isolated per entity. Recall is wired for LLM agents only;
+    roster SCPs still accumulate writes for future use or tooling.
     """
 
     def __init__(self, settings: AppSettings) -> None:

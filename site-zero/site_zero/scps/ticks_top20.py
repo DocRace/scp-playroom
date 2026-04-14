@@ -11,6 +11,8 @@ from typing import Any
 
 from site_zero.agents.scp173 import load_all_entities
 from site_zero.physics import nearest_living_human, propagate_noise, step_toward
+from site_zero.scps.episodic_context import episodic_bias as _mb
+from site_zero.scps.episodic_context import episodic_suffix as _rag
 from site_zero.world.layout import room_graph_for_meta
 from site_zero.world_state import WorldStateStore
 
@@ -32,7 +34,11 @@ def tick_scp_049(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
     room = ent["location"]["room"]
     target = nearest_living_human(entities, eid, same_room_only=True)
     events: list[dict[str, Any]] = [
-        {"level": "info", "msg": f"{eid} perceive=plague_scan think=cure_compulsion", "agent": eid}
+        {
+            "level": "info",
+            "msg": f"{eid} perceive=plague_scan think=cure_compulsion{_rag(store)}",
+            "agent": eid,
+        }
     ]
     if not target:
         return events
@@ -44,7 +50,8 @@ def tick_scp_049(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
         store.set_entity(target, entities[target])
         events.append({"level": "alert", "msg": f"{eid} act=cure_touch {target}", "agent": eid})
         return events
-    nx, ny = step_toward(ox, oy, tx, ty, 0.55)
+    step = max(0.22, 0.55 + _mb(store, "049", amp=0.14))
+    nx, ny = step_toward(ox, oy, tx, ty, step)
     ent["location"]["x"], ent["location"]["y"] = nx, ny
     store.set_entity(eid, ent)
     nm = propagate_noise(room, 32.0, room_graph_for_meta(store.get_meta()), _rooms(store))
@@ -61,10 +68,11 @@ def tick_scp_096(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
     sv = ent.setdefault("state_variables", {})
     room = ent["location"]["room"]
     if not sv.get("enraged"):
+        face_p = max(0.03, min(0.2, 0.08 + _mb(store, "096", amp=0.06)))
         for oid, o in entities.items():
             if o.get("kind") != "d_class" or not o.get("alive"):
                 continue
-            if o.get("location", {}).get("room") == room and random.random() < 0.08:
+            if o.get("location", {}).get("room") == room and random.random() < face_p:
                 sv["face_compromised"] = True
                 sv["enraged"] = True
                 sv["rage_target"] = oid
@@ -116,7 +124,8 @@ def tick_scp_682(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
         return events
     ox, oy = float(ent["location"]["x"]), float(ent["location"]["y"])
     tx, ty = float(entities[target]["location"]["x"]), float(entities[target]["location"]["y"])
-    nx, ny = step_toward(ox, oy, tx, ty, 0.45)
+    step682 = max(0.22, 0.45 + _mb(store, "682", amp=0.14))
+    nx, ny = step_toward(ox, oy, tx, ty, step682)
     ent["location"]["x"], ent["location"]["y"] = nx, ny
     store.set_entity(eid, ent)
     nm = propagate_noise(room, 48.0, room_graph_for_meta(store.get_meta()), _rooms(store))
@@ -130,7 +139,8 @@ def tick_scp_106(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
     ent = entities.get(eid)
     if not ent:
         return []
-    if tick % 4 != 0:
+    phase_shift = int(round(_mb(store, "106", amp=1.2)))
+    if (tick + phase_shift) % 4 != 0:
         return [{"level": "debug", "msg": f"{eid} idle_phase", "agent": eid}]
     room = ent["location"]["room"]
     pool = [k for k, v in entities.items() if v.get("kind") == "d_class" and v.get("alive")]
@@ -174,7 +184,8 @@ def tick_scp_999(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
     ent["location"]["x"], ent["location"]["y"] = nx, ny
     store.set_entity(eid, ent)
     sv = entities[best].setdefault("state_variables", {})
-    sv["fear"] = max(0.0, float(sv.get("fear", 0)) - 0.12)
+    calm = max(0.05, 0.12 + _mb(store, "999", amp=0.05))
+    sv["fear"] = max(0.0, float(sv.get("fear", 0)) - calm)
     store.set_entity(best, entities[best])
     events.append({"level": "info", "msg": f"{eid} act=calm {best}", "agent": eid})
     return events
@@ -187,7 +198,8 @@ def tick_scp_055(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
         return []
     rid = random.choice(list(rooms.keys()))
     cur = float(rooms[rid].get("light_level", 0.5))
-    store.update_room(rid, {"light_level": max(0.05, min(1.0, cur + random.uniform(-0.08, 0.08)))})
+    jitter = random.uniform(-0.08, 0.08) + _mb(store, "055", amp=0.06)
+    store.update_room(rid, {"light_level": max(0.05, min(1.0, cur + jitter))})
     return [{"level": "info", "msg": f"{eid} act=subtle_light_shift {rid}", "agent": eid}]
 
 
@@ -198,13 +210,15 @@ def tick_scp_087(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
             continue
         if o.get("location", {}).get("room") == "abyss-087":
             sv = o.setdefault("state_variables", {})
-            sv["fear"] = min(1.0, float(sv.get("fear", 0)) + 0.06)
+            bump = 0.06 + _mb(store, "087", amp=0.04)
+            sv["fear"] = min(1.0, float(sv.get("fear", 0)) + bump)
             store.set_entity(oid, o)
     return [{"level": "warn", "msg": "SCP-087 act=descent_pressure (entities in abyss)", "agent": "SCP-087"}]
 
 
 def tick_scp_093(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
-    if random.random() > 0.12:
+    gate = max(0.05, min(0.22, 0.12 - _mb(store, "093", amp=0.05)))
+    if random.random() > gate:
         return [{"level": "debug", "msg": "SCP-093 idle", "agent": "SCP-093"}]
     entities = load_all_entities(store)
     ds = [k for k, v in entities.items() if v.get("kind") == "d_class" and v.get("alive")]
@@ -226,7 +240,8 @@ def tick_scp_914(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
     tid = random.choice(pool)
     o = entities[tid]
     sv = o.setdefault("state_variables", {})
-    if random.random() < 0.5:
+    fine_bias = max(0.2, min(0.8, 0.5 + _mb(store, "914", amp=0.22)))
+    if random.random() < fine_bias:
         sv["cognitive_load"] = min(1.0, float(sv.get("cognitive_load", 0)) + 0.05)
         mode = "fine"
     else:
@@ -244,8 +259,9 @@ def tick_scp_2316(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
             continue
         if o.get("location", {}).get("room") == "lake-2316":
             sv = o.setdefault("state_variables", {})
-            sv["cognitive_load"] = min(1.0, float(sv.get("cognitive_load", 0)) + 0.09)
-            sv["fear"] = min(1.0, float(sv.get("fear", 0)) + 0.05)
+            ex = _mb(store, "2316", amp=0.03)
+            sv["cognitive_load"] = min(1.0, float(sv.get("cognitive_load", 0)) + 0.09 + ex)
+            sv["fear"] = min(1.0, float(sv.get("fear", 0)) + 0.05 + ex * 0.5)
             store.set_entity(oid, o)
             n += 1
     return [{"level": "warn", "msg": f"SCP-2316 act=cognito_lake affected={n}", "agent": "SCP-2316"}]
@@ -253,7 +269,7 @@ def tick_scp_2316(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
 
 def tick_scp_2317(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
     meta = store.get_meta()
-    c = float(meta.get("chain_strain", 0.0)) + 0.003
+    c = float(meta.get("chain_strain", 0.0)) + 0.003 + _mb(store, "2317", amp=0.002)
     meta["chain_strain"] = c
     store.set_meta(meta)
     if c > 0.35:
@@ -262,7 +278,7 @@ def tick_scp_2317(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
 
 
 def tick_scp_2000(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
-    if tick % 17 != 0:
+    if (tick + int(round(_mb(store, "2000", amp=2.0)))) % 17 != 0:
         return [{"level": "debug", "msg": "SCP-2000 watch", "agent": "SCP-2000"}]
     meta = store.get_meta()
     meta["rebuild_armed"] = True
@@ -276,21 +292,22 @@ def tick_scp_1981(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
         if o.get("kind") != "d_class" or not o.get("alive"):
             continue
         sv = o.setdefault("state_variables", {})
-        sv["fear"] = min(1.0, float(sv.get("fear", 0)) + 0.02)
+        sv["fear"] = min(1.0, float(sv.get("fear", 0)) + 0.02 + _mb(store, "1981", amp=0.015))
         store.set_entity(oid, o)
     return [{"level": "info", "msg": "SCP-1981 act=signal_cut_whisper", "agent": "SCP-1981"}]
 
 
 def tick_scp_2935(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
     meta = store.get_meta()
-    leak = float(meta.get("dead_universe_leak", 0.0)) + 0.002
+    leak = float(meta.get("dead_universe_leak", 0.0)) + 0.002 + _mb(store, "2935", amp=0.001)
     meta["dead_universe_leak"] = leak
     store.set_meta(meta)
     return [{"level": "warn", "msg": f"SCP-2935 act=entropy_check leak={leak:.4f}", "agent": "SCP-2935"}]
 
 
 def tick_scp_2521(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
-    if random.random() > 0.07:
+    ab = max(0.03, min(0.14, 0.07 - _mb(store, "2521", amp=0.04)))
+    if random.random() > ab:
         return [{"level": "debug", "msg": "SCP-2521 silent", "agent": "SCP-2521"}]
     entities = load_all_entities(store)
     ds = [k for k, v in entities.items() if v.get("kind") == "d_class" and v.get("alive")]
@@ -306,22 +323,27 @@ def tick_scp_2521(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
 
 
 def tick_scp_3008(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
-    store.update_room("maze-3008", {"light_level": max(0.12, float(_rooms(store).get("maze-3008", {}).get("light_level", 0.5)) - 0.03)})
+    dim = max(0.015, 0.03 + _mb(store, "3008", amp=0.018))
+    store.update_room(
+        "maze-3008",
+        {"light_level": max(0.12, float(_rooms(store).get("maze-3008", {}).get("light_level", 0.5)) - dim)},
+    )
     return [{"level": "info", "msg": "SCP-3008 act=closing_shift_dim", "agent": "SCP-3008"}]
 
 
 def tick_scp_1730(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
-    nm = propagate_noise("site13-1730", 28.0, room_graph_for_meta(store.get_meta()), _rooms(store))
+    db = max(18.0, 28.0 + _mb(store, "1730", amp=10.0))
+    nm = propagate_noise("site13-1730", db, room_graph_for_meta(store.get_meta()), _rooms(store))
     return [{"level": "warn", "msg": "SCP-1730 act=structural_echo", "noise_db_by_room": nm, "agent": "SCP-1730"}]
 
 
 def tick_scp_1000(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
-    return [{"level": "debug", "msg": "SCP-1000 act=observe_forest", "agent": "SCP-1000"}]
+    return [{"level": "debug", "msg": f"SCP-1000 act=observe_forest{_rag(store)}", "agent": "SCP-1000"}]
 
 
 def tick_scp_j(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
     meta = store.get_meta()
-    p = int(meta.get("procrastination_ticks", 0)) + 1
+    p = max(1, int(meta.get("procrastination_ticks", 0)) + 1 + int(round(_mb(store, "J", amp=0.35))))
     meta["procrastination_ticks"] = p
     store.set_meta(meta)
     return [{"level": "info", "msg": f"SCP-____-J act=defer_counter={p}", "agent": "SCP-____-J"}]

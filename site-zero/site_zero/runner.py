@@ -42,8 +42,8 @@ def _agent_id_from_event(ev: dict[str, Any]) -> str | None:
     return None
 
 
-def _merge_last_status(store: WorldStateStore, events: list[dict[str, Any]], *, tick: int) -> None:
-    """Expose last log line per agent for the live map GUI (Redis poll)."""
+def _patch_last_status_from_events(store: WorldStateStore, events: list[dict[str, Any]]) -> None:
+    """Merge log lines into last_status so the GUI can update during long LLM ticks."""
     meta = store.get_meta()
     status: dict[str, str] = dict(meta.get("last_status") or {})
     for ev in events:
@@ -53,12 +53,21 @@ def _merge_last_status(store: WorldStateStore, events: list[dict[str, Any]], *, 
             continue
         status[aid] = msg.strip()[:240]
     meta["last_status"] = status
-    meta["sim_tick"] = tick
     store.set_meta(meta)
 
 
-def _merge_noise_meta(store: WorldStateStore, events: list[dict[str, Any]]) -> None:
-    merged: dict[str, float] = {}
+def _set_tick_progress(store: WorldStateStore, tick: int, phase: str) -> None:
+    """Let the GUI advance the tick counter immediately; long LLM ticks otherwise look frozen."""
+    meta = store.get_meta()
+    meta["sim_tick"] = tick
+    meta["tick_phase"] = phase
+    store.set_meta(meta)
+
+
+def _finalize_tick_meta(store: WorldStateStore, events: list[dict[str, Any]], *, tick: int) -> None:
+    """Single read-modify-write for noise + agent status + tick (avoids partial meta between merges)."""
+    meta = store.get_meta()
+    merged_n: dict[str, float] = {}
     for ev in events:
         nm = ev.get("noise_db_by_room")
         if not isinstance(nm, dict):
@@ -68,11 +77,19 @@ def _merge_noise_meta(store: WorldStateStore, events: list[dict[str, Any]]) -> N
                 fv = float(v)
             except (TypeError, ValueError):
                 continue
-            merged[str(k)] = max(merged.get(str(k), 0.0), fv)
-    if not merged:
-        return
-    meta = store.get_meta()
-    meta["last_noise_by_room"] = merged
+            merged_n[str(k)] = max(merged_n.get(str(k), 0.0), fv)
+    if merged_n:
+        meta["last_noise_by_room"] = merged_n
+    status: dict[str, str] = dict(meta.get("last_status") or {})
+    for ev in events:
+        aid = _agent_id_from_event(ev)
+        msg = ev.get("msg")
+        if not aid or not isinstance(msg, str) or not msg.strip():
+            continue
+        status[aid] = msg.strip()[:240]
+    meta["last_status"] = status
+    meta["sim_tick"] = tick
+    meta["tick_phase"] = "idle"
     store.set_meta(meta)
 
 
@@ -129,6 +146,7 @@ async def run_simulation(
 
         while True:
             tick += 1
+            _set_tick_progress(store, tick, "running")
             tick_settings = _tick_settings_for_ollama(settings, ollama_ok)
             entities = load_all_entities(store)
             perception = render_scp173_context(entities, tick, store.get_rooms())
@@ -152,6 +170,7 @@ async def run_simulation(
             )
             for ev in ev079:
                 _log_line(ev.get("level", "info"), ev.get("msg", ""))
+            _patch_last_status_from_events(store, ev079)
             if memory:
                 await memory.remember(
                     http,
@@ -191,6 +210,7 @@ async def run_simulation(
                 noise_accum.extend(ev_d)
                 for ev in ev_d:
                     _log_line(ev.get("level", "info"), ev.get("msg", ""))
+                _patch_last_status_from_events(store, ev_d)
                 if memory and use_llm_d:
                     await memory.remember(
                         http,
@@ -199,10 +219,26 @@ async def run_simulation(
                         {"tick": tick, "kind": "d_class"},
                     )
 
-            ev_scp = await dispatch_scp_ticks_except_173(store, tick)
+            ev_scp = await dispatch_scp_ticks_except_173(store, tick, memory=memory, http=http)
             noise_accum.extend(ev_scp)
             for ev in ev_scp:
                 _log_line(ev.get("level", "info"), ev.get("msg", ""))
+            _patch_last_status_from_events(store, ev_scp)
+            if memory:
+                roster_by_scp: dict[str, list[dict[str, Any]]] = {}
+                for ev in ev_scp:
+                    aid = ev.get("agent")
+                    if isinstance(aid, str) and aid.startswith("SCP-"):
+                        roster_by_scp.setdefault(aid, []).append(ev)
+                for aid, rows in sorted(roster_by_scp.items()):
+                    snip = events_to_snippet(rows)
+                    if snip:
+                        await memory.remember(
+                            http,
+                            aid,
+                            snip,
+                            {"tick": tick, "kind": "roster_scp"},
+                        )
 
             entities = load_all_entities(store)
             perception173 = render_scp173_context(entities, tick, store.get_rooms())
@@ -221,6 +257,7 @@ async def run_simulation(
             noise_accum.extend(events173)
             for ev in events173:
                 _log_line(ev.get("level", "info"), ev.get("msg", ""))
+            _patch_last_status_from_events(store, events173)
             if memory:
                 await memory.remember(
                     http,
@@ -229,8 +266,7 @@ async def run_simulation(
                     {"tick": tick, "kind": "scp173"},
                 )
 
-            _merge_noise_meta(store, noise_accum)
-            _merge_last_status(store, noise_accum, tick=tick)
+            _finalize_tick_meta(store, noise_accum, tick=tick)
 
             if settings.ollama.narrative_enabled and ollama_ok:
                 try:
