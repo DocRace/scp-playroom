@@ -1,0 +1,14 @@
+## Site perceptual frame — tick {{ tick }}
+
+### Site systems (SCP-079)
+{% for rid, rv in rooms.items() %}
+- **{{ rid }}** — light {{ "%.2f"|format(rv.get('light_level', 0)|float) }}, door {{ 'locked' if rv.get('is_locked') else 'unlocked' }}
+{% endfor %}
+
+### Containment summary
+{% for eid, e in entities.items() %}
+- **{{ eid }}** (`{{ e.get('kind', '?') }}`) — room `{{ e.get('location', {}).get('room', '?') }}` @ ({{ "%.2f"|format(e.get('location', {}).get('x', 0)|float) }}, {{ "%.2f"|format(e.get('location', {}).get('y', 0)|float) }}){% if eid == 'SCP-173' %} — observable: **{{ e.get('observable', False) }}**{% endif %}
+{% endfor %}
+
+### Operational notes
+- Movement while unobserved is handled by containment logic; do not anthropomorphize beyond protocol.

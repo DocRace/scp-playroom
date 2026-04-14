@@ -1,0 +1,13 @@
+services:
+  redis-stack:
+    image: redis/redis-stack-server:latest
+    container_name: site-zero-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - site_zero_redis:/data
+    environment:
+      - REDIS_ARGS=--save 60 1
+
+volumes:
+  site_zero_redis:

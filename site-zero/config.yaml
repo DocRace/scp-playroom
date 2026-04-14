@@ -1,0 +1,43 @@
+# Project Site-Zero — defaults align with ai-tabulation Ollama setup
+# Copy or symlink: ln -s ../ai-tabulation/config.yaml ./config-ai-tab.yaml
+
+redis:
+  url: "redis://localhost:6379/0"
+  # Set false to use in-process memory (no Docker Redis required for dry runs)
+  enabled: true
+
+simulation:
+  tick_interval_seconds: 1.0
+  site_id: "SITE-ZERO-01"
+  site_preset: "full" # or "minimal" for two-room 173 sandbox
+
+# Each tick: SCP-079, D-class (up to d_class_llm_max), SCP-173 may call Ollama JSON when reachable
+agents:
+  use_llm: true
+  fallback_to_rules: true
+  d_class_llm_max: 3
+
+ollama:
+  base_url: "http://localhost:11434"
+  # Fast local trial: llama3.2 (~2GB). Heavy runs: SITE_ZERO_MODEL=deepseek-r1:32b
+  model: "llama3.2:latest"
+  timeout_seconds: 120
+  # Optional one-line narrative per tick (adds latency); movement stays rule-based
+  narrative_enabled: false
+
+# Vector memory: use same small model for /api/embeddings if you have no nomic-embed-text
+memory:
+  enabled: true
+  chroma_path: "data/chroma_site_zero"
+  embedding_model: "llama3.2:latest"
+  recall_top_k: 6
+
+paths:
+  # Ollama stores weights under ~/.ollama/models (blobs + manifests). Not used at runtime.
+  ollama_models_hint: "~/.ollama/models"
+
+# Phase 2 — SCP-079 (monitoring AI): LangGraph observe→plan→execute
+scp079:
+  enabled: true
+  # If true, plan node calls Ollama JSON (slower); false = deterministic rules
+  use_llm: false
