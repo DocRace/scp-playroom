@@ -12,15 +12,16 @@ import httpx
 
 from site_zero.agents.d_class import apply_d_class_tick_async
 from site_zero.agents.scp079 import apply_scp079_tick_async
-from site_zero.agents.scp079_graph import observe_scp079_state
+from site_zero.agents.scp079_graph import observe_scp079_state, scp079_snapshot_for_llm
 from site_zero.agents.scp173 import apply_scp173_tick_async, load_all_entities
 from site_zero.memory.vector_memory import VectorAgentMemory, events_to_snippet, format_memory_prompt_block
 from site_zero.ollama_client import ollama_available, ollama_generate
-from site_zero.perception import render_scp173_context
+from site_zero.perception import render_entity_pov_context
+from site_zero.perception_pov import pov_snapshot_json_for_recall
 from site_zero.scps.tick_dispatch import dispatch_scp_ticks_except_173
 from site_zero.seed import ensure_world_seed
 from site_zero.settings import AppSettings
-from site_zero.world_state import MemoryWorldState, WorldStateStore, connect_world_state
+from site_zero.world_state import MemoryWorldState, WorldStateStore, connect_world_state, reset_redis_world_state
 
 
 def _ts() -> str:
@@ -108,8 +109,15 @@ async def run_simulation(
     store: WorldStateStore | None = None,
     max_ticks: int | None = None,
     verbose: bool = False,
+    reset_state: bool = False,
 ) -> None:
     if store is None:
+        if reset_state and settings.redis.enabled:
+            try:
+                reset_redis_world_state(settings.redis.url)
+                _log_line("info", "Redis world state reset (FLUSHDB)", url=settings.redis.url)
+            except Exception as exc:
+                _log_line("warn", f"Redis reset failed (continuing): {exc}")
         store = connect_world_state(settings.redis.url, settings.redis.enabled)
     ensure_world_seed(store, site_preset=settings.simulation.site_preset)
 
@@ -148,16 +156,18 @@ async def run_simulation(
             tick += 1
             _set_tick_progress(store, tick, "running")
             tick_settings = _tick_settings_for_ollama(settings, ollama_ok)
-            entities = load_all_entities(store)
-            perception = render_scp173_context(entities, tick, store.get_rooms())
+            perception173_dbg = render_entity_pov_context(store, "SCP-173", tick)
             if verbose:
-                _log_line("debug", "--- perception ---\n" + perception)
+                _log_line("debug", "--- perception (SCP-173 POV) ---\n" + perception173_dbg)
 
             mem079 = ""
             mem173 = ""
             if memory:
                 st079 = observe_scp079_state(store, tick)
-                q079 = f"SCP-079 site tick {tick} " + json.dumps(st079, default=str)[:3500]
+                q079 = f"SCP-079 site tick {tick} " + json.dumps(
+                    scp079_snapshot_for_llm(st079),
+                    default=str,
+                )[:3500]
                 lines079 = await memory.recall_lines(http, "SCP-079", q079)
                 mem079 = format_memory_prompt_block(lines079)
 
@@ -192,11 +202,7 @@ async def run_simulation(
                 )
                 mem_d = ""
                 if memory and use_llm_d:
-                    d_ent = entities.get(d_id, {})
-                    q_d = f"{d_id} tick {tick} " + json.dumps(
-                        {"self": d_ent, "rooms": store.get_rooms()},
-                        default=str,
-                    )[:3500]
+                    q_d = pov_snapshot_json_for_recall(store, d_id, tick=tick, max_len=3200)
                     lines_d = await memory.recall_lines(http, d_id, q_d)
                     mem_d = format_memory_prompt_block(lines_d)
                 ev_d = await apply_d_class_tick_async(
@@ -206,6 +212,7 @@ async def run_simulation(
                     memory_context=mem_d,
                     entity_id=d_id,
                     use_llm=use_llm_d,
+                    tick=tick,
                 )
                 noise_accum.extend(ev_d)
                 for ev in ev_d:
@@ -241,7 +248,7 @@ async def run_simulation(
                         )
 
             entities = load_all_entities(store)
-            perception173 = render_scp173_context(entities, tick, store.get_rooms())
+            perception173 = render_entity_pov_context(store, "SCP-173", tick)
             if memory:
                 q173 = f"SCP-173 tick {tick} " + perception173[:3500]
                 lines173 = await memory.recall_lines(http, "SCP-173", q173)
@@ -300,9 +307,17 @@ def run_sync(
     *,
     max_ticks: int | None = None,
     verbose: bool = False,
+    reset_state: bool = False,
 ) -> None:
     try:
-        asyncio.run(run_simulation(settings, max_ticks=max_ticks, verbose=verbose))
+        asyncio.run(
+            run_simulation(
+                settings,
+                max_ticks=max_ticks,
+                verbose=verbose,
+                reset_state=reset_state,
+            )
+        )
     except KeyboardInterrupt:
         _log_line("info", "Shutdown signal — Site-Zero tick loop stopped")
         sys.exit(0)

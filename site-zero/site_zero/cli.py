@@ -77,6 +77,12 @@ def main() -> None:
         action="store_true",
         help="Run simulation + map in one process (shared memory); uses config LLM settings",
     )
+    parser.add_argument(
+        "--reset-state",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="With Redis, FLUSHDB on the configured DB before seeding (default: true). Use --no-reset-state to keep data.",
+    )
     args = parser.parse_args()
     settings = load_settings(args.config)
     if args.memory:
@@ -106,7 +112,12 @@ def main() -> None:
         run_gui(config_path=args.config)
         return
 
-    run_sync(settings, max_ticks=args.ticks, verbose=args.verbose)
+    run_sync(
+        settings,
+        max_ticks=args.ticks,
+        verbose=args.verbose,
+        reset_state=args.reset_state,
+    )
 
 
 if __name__ == "__main__":

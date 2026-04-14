@@ -189,6 +189,15 @@ class RedisWorldState(WorldStateStore):
         self._json.set(META_KEY, Path.root_path(), meta)  # type: ignore[arg-type]
 
 
+def reset_redis_world_state(redis_url: str) -> None:
+    """Clear the Redis logical database used by Site-Zero (FLUSHDB on URL's DB index)."""
+    if redis is None:
+        raise RuntimeError("redis package is not installed")
+    r = redis.Redis.from_url(redis_url, decode_responses=True)
+    r.ping()
+    r.flushdb()
+
+
 def connect_world_state(redis_url: str, use_redis: bool) -> WorldStateStore:
     if not use_redis:
         return MemoryWorldState()

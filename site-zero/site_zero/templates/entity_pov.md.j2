@@ -1,0 +1,30 @@
+## Local frame — tick {{ tick }} — `{{ viewer_id }}`
+
+You only sense **this zone** (your room, co-present entities, directly connected rooms). You do **not** have site-wide containment telemetry unless you are the central monitoring system.
+
+### You
+- **Entity:** `{{ viewer_id }}`
+- **Room:** `{{ self_room }}` @ ({{ "%.2f"|format(self_x|float) }}, {{ "%.2f"|format(self_y|float) }})
+{% if self_kind %}— kind: `{{ self_kind }}`{% endif %}
+
+### Others in this room
+{% if others %}
+{% for eid, e in others.items() %}
+- **{{ eid }}** (`{{ e.get('kind', '?') }}`) @ ({{ "%.2f"|format(e.get('location', {}).get('x', 0)|float) }}, {{ "%.2f"|format(e.get('location', {}).get('y', 0)|float) }}){% if eid == 'SCP-173' %} — observable: **{{ e.get('observable', False) }}**{% endif %}
+{% endfor %}
+{% else %}
+- *(none registered in this room)*
+{% endif %}
+
+### This room & adjacent spaces (environment only)
+{% for rid, rv in rooms.items() %}
+- **{{ rid }}** — light {{ "%.2f"|format(rv.get('light_level', 0)|float) }}, door {{ 'locked' if rv.get('is_locked') else 'unlocked' }}
+{% endfor %}
+
+### Acoustic hints (this room + neighbors, dB)
+{% for rid, db in noise.items() %}
+- **{{ rid }}** — {{ "%.1f"|format(db|float) }}
+{% endfor %}
+
+### Topology
+- **Neighbor room ids:** {{ neighbor_ids | join(', ') if neighbor_ids else '—' }}

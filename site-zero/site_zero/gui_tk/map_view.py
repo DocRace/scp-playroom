@@ -29,23 +29,42 @@ def _room_centers(
     ch: int,
     margin: int,
 ) -> dict[str, tuple[float, float]]:
+    """Place rooms using ``layout_xy`` when present; else hub-and-spoke fallback."""
+    layout_ids = [rid for rid in graph if "layout_xy" in graph.get(rid, {})]
+    if len(layout_ids) == len(graph) and layout_ids:
+        xs = [float(graph[rid]["layout_xy"][0]) for rid in graph]  # type: ignore[index]
+        ys = [float(graph[rid]["layout_xy"][1]) for rid in graph]  # type: ignore[index]
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+        span_x = max(max_x - min_x, 0.08)
+        span_y = max(max_y - min_y, 0.08)
+        inner_w = cw - 2 * margin
+        inner_h = ch - 2 * margin
+        out: dict[str, tuple[float, float]] = {}
+        for rid in graph:
+            lx, ly = graph[rid]["layout_xy"]  # type: ignore[index]
+            nx = (float(lx) - min_x) / span_x
+            ny = (float(ly) - min_y) / span_y
+            out[rid] = (margin + nx * inner_w, margin + ny * inner_h)
+        return out
+
     cx, cy = cw / 2, ch / 2
     R = min(cw, ch) / 2 - margin
     hub = "site-hub" if "site-hub" in graph else None
     others = sorted(r for r in graph.keys() if r != hub)
-    out: dict[str, tuple[float, float]] = {}
+    out_fb: dict[str, tuple[float, float]] = {}
     if hub:
-        out[hub] = (cx, cy)
+        out_fb[hub] = (cx, cy)
         n = len(others)
         for i, rid in enumerate(others):
             ang = 2 * math.pi * i / max(n, 1) - math.pi / 2
-            out[rid] = (cx + R * 0.62 * math.cos(ang), cy + R * 0.62 * math.sin(ang))
-        return out
+            out_fb[rid] = (cx + R * 0.62 * math.cos(ang), cy + R * 0.62 * math.sin(ang))
+        return out_fb
     n = len(others)
     for i, rid in enumerate(others):
         x = margin + (cw - 2 * margin) * (i + 1) / max(n + 1, 1)
-        out[rid] = (x, cy)
-    return out
+        out_fb[rid] = (x, cy)
+    return out_fb
 
 
 class SiteMapApp:

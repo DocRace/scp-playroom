@@ -37,6 +37,39 @@ def observe_scp079_state(store: WorldStateStore, tick: int) -> Scp079GraphState:
     }
 
 
+def _slim_meta_for_079_llm(meta: dict[str, Any]) -> dict[str, Any]:
+    """Drop cross-agent status lines; keep site telemetry SCP-079 may plausibly sense."""
+    keys = ("last_noise_by_room", "sim_tick", "tick_phase", "site_preset")
+    out: dict[str, Any] = {k: meta[k] for k in keys if k in meta}
+    ls = meta.get("last_status")
+    if isinstance(ls, dict) and "SCP-079" in ls:
+        out["last_status"] = {"SCP-079": ls["SCP-079"]}
+    return out
+
+
+def _redact_entities_for_079_llm(entities: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """No coordinates or internal state — room + kind + life only (monitoring-style)."""
+    out: dict[str, dict[str, Any]] = {}
+    for eid, e in entities.items():
+        loc = e.get("location") or {}
+        out[eid] = {
+            "kind": e.get("kind"),
+            "room": loc.get("room"),
+            "alive": e.get("alive", True),
+        }
+    return out
+
+
+def scp079_snapshot_for_llm(state: Scp079GraphState) -> dict[str, Any]:
+    """Prompt / RAG payload: site env + occupancy summary, not full entity blobs."""
+    return {
+        "tick": state.get("tick", 0),
+        "entities": _redact_entities_for_079_llm(state.get("entities", {})),
+        "rooms": state.get("rooms", {}),
+        "meta": _slim_meta_for_079_llm(dict(state.get("meta", {}))),
+    }
+
+
 def execute_scp079_actions(store: WorldStateStore, actions: list[dict[str, Any]]) -> list[str]:
     registry = register_phase2_tools()
     logs: list[str] = []
@@ -115,12 +148,7 @@ def _plan_rules(state: Scp079GraphState) -> list[dict[str, Any]]:
 
 
 def _plan_llm(state: Scp079GraphState, settings: AppSettings) -> list[dict[str, Any]]:
-    snap = {
-        "tick": state.get("tick", 0),
-        "entities": state.get("entities", {}),
-        "rooms": state.get("rooms", {}),
-        "meta": state.get("meta", {}),
-    }
+    snap = scp079_snapshot_for_llm(state)
     prompt = (
         "You are SCP-079 (site control AI). Output ONLY valid JSON with this shape:\n"
         '{"actions":[{"tool":"set_room_light","params":{"room_id":"containment-173",'
@@ -214,12 +242,7 @@ async def plan_scp079_llm_async(
     *,
     memory_context: str = "",
 ) -> list[dict[str, Any]]:
-    snap = {
-        "tick": state.get("tick", 0),
-        "entities": state.get("entities", {}),
-        "rooms": state.get("rooms", {}),
-        "meta": state.get("meta", {}),
-    }
+    snap = scp079_snapshot_for_llm(state)
     system = (
         "You are SCP-079, an on-site control AI. Reply with JSON only. "
         'Shape: {"actions":[{"tool":"set_room_light","params":{"room_id":"containment-173","light_level":0.8}},'

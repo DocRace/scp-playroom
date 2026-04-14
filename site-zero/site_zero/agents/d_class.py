@@ -10,6 +10,7 @@ import httpx
 
 from site_zero.agents.scp173 import load_all_entities
 from site_zero.ollama_client import ollama_chat_json
+from site_zero.perception_pov import pov_snapshot_for_entity
 from site_zero.physics import scp173_is_observed
 from site_zero.settings import AppSettings
 from site_zero.world_state import WorldStateStore
@@ -59,6 +60,7 @@ async def apply_d_class_tick_async(
     entity_id: str = "D-9022",
     memory_context: str = "",
     use_llm: bool | None = None,
+    tick: int = 0,
 ) -> list[dict[str, Any]]:
     ent = store.get_entity(entity_id)
     if not ent or not ent.get("alive", True):
@@ -68,16 +70,12 @@ async def apply_d_class_tick_async(
     if not llm_on:
         return _rules_turn_toward_173(store, entity_id, load_all_entities(store))
 
-    entities = load_all_entities(store)
-    snap = {
-        "self": ent,
-        "others": {k: v for k, v in entities.items() if k != entity_id},
-        "rooms": store.get_rooms(),
-    }
+    snap = pov_snapshot_for_entity(store, entity_id, tick=tick)
     system = (
         "You are a D-Class subject in a containment facility. Output JSON only: "
         '{"facing_dx": number, "facing_dy": number, "intention": "short phrase"}. '
         "facing_* is a direction you look toward (will be normalized). "
+        "You only perceive your current zone (same-room entities, this room, linked corridors). "
         "Survival: if SCP-173 is in your room and could move when unseen, prefer keeping it in view."
     )
     user = "State:\n" + json.dumps(snap, default=str)[:8000]
