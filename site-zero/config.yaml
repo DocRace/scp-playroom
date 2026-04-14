@@ -15,7 +15,7 @@ simulation:
 agents:
   use_llm: true
   fallback_to_rules: true
-  d_class_llm_max: 3
+  d_class_llm_max: 20
 
 ollama:
   base_url: "http://localhost:11434"
@@ -40,4 +40,4 @@ paths:
 scp079:
   enabled: true
   # If true, plan node calls Ollama JSON (slower); false = deterministic rules
-  use_llm: false
+  use_llm: true

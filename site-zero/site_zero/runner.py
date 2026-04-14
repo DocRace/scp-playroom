@@ -88,10 +88,12 @@ def _tick_settings_for_ollama(settings: AppSettings, ollama_ok: bool) -> AppSett
 async def run_simulation(
     settings: AppSettings,
     *,
+    store: WorldStateStore | None = None,
     max_ticks: int | None = None,
     verbose: bool = False,
 ) -> None:
-    store = connect_world_state(settings.redis.url, settings.redis.enabled)
+    if store is None:
+        store = connect_world_state(settings.redis.url, settings.redis.enabled)
     ensure_world_seed(store, site_preset=settings.simulation.site_preset)
 
     _log_line("info", "Site-Zero heartbeat online", site=settings.simulation.site_id)

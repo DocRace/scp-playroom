@@ -72,12 +72,12 @@ def main() -> None:
         action="store_true",
         help="Open live map window (Tkinter); run the simulator in another terminal with Redis",
     )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Run simulation + map in one process (shared memory); uses config LLM settings",
+    )
     args = parser.parse_args()
-    if args.gui:
-        from site_zero.gui_map import run_gui
-
-        run_gui(config_path=args.config)
-        return
     settings = load_settings(args.config)
     if args.memory:
         settings.redis.enabled = False
@@ -94,6 +94,18 @@ def main() -> None:
         settings.memory.enabled = False
     if args.site:
         settings.simulation = settings.simulation.model_copy(update={"site_preset": args.site})
+
+    if args.live:
+        from site_zero.gui_map import run_gui_live
+
+        run_gui_live(settings, max_ticks=args.ticks, verbose=args.verbose)
+        return
+    if args.gui:
+        from site_zero.gui_map import run_gui
+
+        run_gui(config_path=args.config)
+        return
+
     run_sync(settings, max_ticks=args.ticks, verbose=args.verbose)
 
 

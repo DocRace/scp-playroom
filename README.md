@@ -13,7 +13,8 @@ Experimental **multi-agent containment simulation** (“Site-Zero”): rule-base
 ## Requirements
 
 - **Python** 3.11+
-- **Redis** (Redis Stack JSON recommended) — required for the live map and normal multi-process runs  
+- **Redis** (Redis Stack JSON recommended) — for `--gui` while the sim runs in another terminal  
+- **Tcl/Tk** — required for `--gui` / `--live` (see **Troubleshooting** if `No module named '_tkinter'`)  
 - **Ollama** (optional) — LLM policies for SCP-079, D-class, SCP-173; rules-only mode works without it
 
 ## Quick start
@@ -50,13 +51,15 @@ Useful flags:
 | `--memory`      | In-process store only (no Redis) — **GUI won’t sync** |
 | `--rules-only`  | No Ollama; deterministic rules                       |
 | `--gui`         | Open Tkinter live map (needs Redis + running sim)    |
+| `--live`        | Sim + map in one process (shared memory; no Redis)   |
 | `--site minimal`| Small 173 sandbox instead of full site               |
 
 Examples:
 
 ```bash
 python -m site_zero --rules-only --ticks 100
-python -m site_zero --gui                    # second terminal, while sim runs
+python -m site_zero --live                   # sim + map; needs Tcl/Tk (see below)
+python -m site_zero --gui                    # second terminal, while sim runs (Redis)
 ```
 
 ### Configuration
@@ -72,7 +75,25 @@ Edit `site-zero/config.yaml`, or override with environment variables, for exampl
 
 - **Full preset**: hub-and-spoke site graph, many rooms, a roster of iconic SCP-style entities with simple per-tick rules, ~20 D-class subjects, SCP-079 site controls, SCP-173 with line-of-sight physics.
 - **Minimal preset**: legacy two-room style sandbox for SCP-173.
-- **Live map** (`--gui`): polls Redis for entity positions and last action lines written each tick.
+- **Live map**: `--live` (in-process) or `--gui` + Redis; shows entity positions and last action lines each tick.
+
+## Troubleshooting
+
+### `ModuleNotFoundError: No module named '_tkinter'`
+
+Homebrew’s `python@3.13` often ships without Tk. Install the matching `python-tk` formula and **recreate the venv** with that interpreter, for example:
+
+```bash
+brew install python-tk@3.13
+cd site-zero
+rm -rf .venv
+"$(brew --prefix python@3.13)/bin/python3.13" -m venv .venv
+source .venv/bin/activate
+pip install -e .
+python -m site_zero --live
+```
+
+Alternatively use the installer from [python.org](https://www.python.org/downloads/), which includes Tk.
 
 ## License / attribution
 

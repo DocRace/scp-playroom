@@ -115,6 +115,13 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
         settings.memory.enabled = True
     if os.environ.get("SITE_ZERO_EMBED_MODEL"):
         settings.memory.embedding_model = os.environ["SITE_ZERO_EMBED_MODEL"]
+    if raw_dc := os.environ.get("SITE_ZERO_D_CLASS_LLM_MAX", "").strip():
+        try:
+            settings.agents = settings.agents.model_copy(
+                update={"d_class_llm_max": max(0, int(raw_dc))},
+            )
+        except ValueError:
+            pass
     sp = os.environ.get("SITE_ZERO_SITE_PRESET", "").lower().strip()
     if sp in ("full", "minimal"):
         sim = settings.simulation.model_dump()
