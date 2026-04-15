@@ -76,7 +76,7 @@ Edit `site-zero/config.yaml`, or override with environment variables, for exampl
 
 - **Full preset**: hub-and-spoke site graph, many rooms, a roster of iconic SCP-style entities with simple per-tick rules, ~20 D-class subjects, SCP-079 site controls, SCP-173 with line-of-sight physics.
 - **Minimal preset**: legacy two-room style sandbox for SCP-173.
-- **Live map** (`--live` or `--gui` + Redis): positions, SCP/D-class roster, optional **entity chat** when Ollama is up, and **room / passage** overlays — brightness ∝ `light_level`, amber outline when `is_locked`, room **tags** when not generic, and on each edge markers + a **dB pair** aligned with the acoustic graph (see the GUI legend). Locks change noise propagation, not movement, in this build.
+- **Live map** (`--live` or `--gui` + Redis): positions; SCP/D-class roster with a **Lit** column (current room `light_level` as %); optional **entity chat** when Ollama is up; and **room / passage** overlays — room **tile + bottom light bar** reflect `light_level`, amber outline when `is_locked`, room **tags** when not generic, and on each edge markers + a **dB pair** aligned with the acoustic graph (see the in-window legend). Locks change noise propagation, not movement, in this build.
 
 ## Troubleshooting
 

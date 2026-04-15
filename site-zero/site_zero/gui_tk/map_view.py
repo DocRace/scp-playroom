@@ -193,13 +193,50 @@ def _parse_light_level(room_blob: dict[str, Any] | None) -> float:
 
 
 def _room_fill_for_light(light_level: float) -> str:
-    """Slightly brighten room tile when lights are up (same hue family as base #1a2238)."""
-    base_r, base_g, base_b = 0x1A, 0x22, 0x38
-    f = 0.42 + 0.58 * light_level
-    r = int(min(255, base_r * f))
-    g = int(min(255, base_g * f))
-    b = int(min(255, base_b * f))
+    """Room tile: dark when lights down, noticeably brighter + slightly warm when up."""
+    lv = max(0.0, min(1.0, light_level))
+    # Low: deep blue-gray; high: lifted slate with a hint of amber (reads as "lit" on the map).
+    r0, g0, b0 = 12, 15, 26
+    r1, g1, b1 = 38, 44, 68
+    r2, g2, b2 = 58, 56, 48
+    if lv <= 0.5:
+        t = lv * 2.0
+        r = int(r0 + (r1 - r0) * t)
+        g = int(g0 + (g1 - g0) * t)
+        b = int(b0 + (b1 - b0) * t)
+    else:
+        t = (lv - 0.5) * 2.0
+        r = int(r1 + (r2 - r1) * t)
+        g = int(g1 + (g2 - g1) * t)
+        b = int(b1 + (b2 - b1) * t)
     return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _light_level_text_color(light_level: float) -> str:
+    lv = max(0.0, min(1.0, light_level))
+    r = int(72 + (210 - 72) * lv)
+    g = int(88 + (224 - 88) * lv)
+    b = int(120 + (238 - 120) * lv)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _light_bar_colors(light_level: float) -> tuple[str, str]:
+    lv = max(0.0, min(1.0, light_level))
+    track = "#1e2436"
+    # Fill: amber (dim) -> soft daylight (bright)
+    r = int(90 + (255 - 90) * lv)
+    g = int(70 + (240 - 70) * lv)
+    b = int(35 + (200 - 35) * lv)
+    fill = f"#{r:02x}{g:02x}{b:02x}"
+    return track, fill
+
+
+def _room_light_percent_str(room_id: str, rooms_live: dict[str, dict[str, Any]]) -> str:
+    rb = rooms_live.get(room_id)
+    if not isinstance(rb, dict):
+        return "—"
+    lit = _parse_light_level(rb)
+    return f"{int(round(lit * 100))}%"
 
 
 class SiteMapApp:
@@ -249,10 +286,10 @@ class SiteMapApp:
         self.lbl_warn.pack(side=tk.RIGHT)
 
         self._map_legend_full = (
-            "Map: room darkness ∝ light; amber outline = locked. "
+            "Map: room tile + bar = light_level (0–100%); amber outline = locked. "
             "On each link, a dot toward a room = that room is locked (extra noise loss into it when sound crosses from the neighbor). "
             "dB pair (alphabetical room id order) = nominal loss when noise leaves each end. "
-            "Passage is not movement-blocked by locks in this build."
+            "Passage is not movement-blocked by locks in this build. Roster Lit = brightness of that entity's room."
         )
         self._map_legend = tk.Label(
             root,
@@ -340,7 +377,7 @@ class SiteMapApp:
             wrap.pack(fill=tk.BOTH, expand=True)
             scroll = ttk.Scrollbar(wrap)
             scroll.pack(side=tk.RIGHT, fill=tk.Y)
-            cols = ("id", "status", "room", "pos", "last")
+            cols = ("id", "status", "room", "lit", "pos", "last")
             tree = ttk.Treeview(
                 wrap,
                 columns=cols,
@@ -352,14 +389,16 @@ class SiteMapApp:
             tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             scroll.config(command=tree.yview)
             # Compact widths so two panes fit side-by-side (~320px each at default sash).
-            tree.column("id", width=76, minwidth=60, stretch=False, anchor="w")
-            tree.column("status", width=42, minwidth=36, stretch=False, anchor="center")
-            tree.column("room", width=62, minwidth=48, stretch=True, anchor="w")
+            tree.column("id", width=72, minwidth=56, stretch=False, anchor="w")
+            tree.column("status", width=40, minwidth=34, stretch=False, anchor="center")
+            tree.column("room", width=56, minwidth=44, stretch=True, anchor="w")
+            tree.column("lit", width=36, minwidth=32, stretch=False, anchor="e")
             tree.column("pos", width=44, minwidth=40, stretch=False, anchor="e")
-            tree.column("last", width=72, minwidth=48, stretch=True, anchor="w")
+            tree.column("last", width=68, minwidth=44, stretch=True, anchor="w")
             tree.heading("id", text="ID")
-            tree.heading("status", text="Stat")
+            tree.heading("status", text="St")
             tree.heading("room", text="Room")
+            tree.heading("lit", text="Lit")
             tree.heading("pos", text="x,y")
             tree.heading("last", text="Last")
             _apply_roster_row_tags(tree)
@@ -799,14 +838,34 @@ class SiteMapApp:
                 width=outline_w,
                 tags=("room", rid),
             )
+            bx0, bx1 = x0 + 4, x1 - 4
+            bw = max(4.0, bx1 - bx0)
+            bar_y0, bar_y1 = y1 - 19, y1 - 14
+            track_c, fill_c = _light_bar_colors(lit)
+            self.canvas.create_rectangle(
+                bx0, bar_y0, bx1, bar_y1,
+                outline=track_c,
+                fill=track_c,
+                width=1,
+                tags=("room", rid),
+            )
+            fill_w = bw * lit
+            if fill_w >= 0.75:
+                self.canvas.create_rectangle(
+                    bx0, bar_y0, bx0 + fill_w, bar_y1,
+                    outline=fill_c,
+                    fill=fill_c,
+                    width=1,
+                    tags=("room", rid),
+                )
             short = rid.replace("con-", "C-").replace("site-", "")[:14]
             self.canvas.create_text(cx, cy - rh / 2 - 8, text=short, fill="#8899bb", font=("Helvetica", 8))
             lit_pct = int(round(lit * 100.0))
             self.canvas.create_text(
                 cx, cy + rh / 2 - 10,
                 text=f"{lit_pct}%",
-                fill="#6a7a9a",
-                font=("Helvetica", 7),
+                fill=_light_level_text_color(lit),
+                font=("Helvetica", 7, "bold"),
                 tags=("room", rid),
             )
             tags_list = rb.get("tags") if isinstance(rb.get("tags"), list) else []
@@ -836,18 +895,19 @@ class SiteMapApp:
         tick_active_raw = meta.get("tick_active_agent")
         tick_active: str | None = tick_active_raw if isinstance(tick_active_raw, str) else None
 
-        scp_rows: list[tuple[tuple[str, str, str, str, str], str]] = []
-        d_rows: list[tuple[tuple[str, str, str, str, str], str]] = []
+        scp_rows: list[tuple[tuple[str, str, str, str, str, str], str]] = []
+        d_rows: list[tuple[tuple[str, str, str, str, str, str], str]] = []
         for eid in sorted(entities):
             ent = entities[eid]
             loc = ent.get("location") or {}
             room = str(loc.get("room", "?"))
+            lit_cell = _room_light_percent_str(room, rooms_live)
             last_raw = str((meta.get("last_status") or {}).get(eid, "—"))
             st = _life_status_line(ent)
             x, y = float(loc.get("x", 0)), float(loc.get("y", 0))
             pos_s = f"{x:.1f},{y:.1f}"
-            last_cell = _truncate_cell(last_raw, 52)
-            row_vals = (eid, st, room, pos_s, last_cell)
+            last_cell = _truncate_cell(last_raw, 48)
+            row_vals = (eid, st, room, lit_cell, pos_s, last_cell)
             tag = _status_row_tag(st)
             if ent.get("kind") == "scp":
                 scp_rows.append((row_vals, tag))
