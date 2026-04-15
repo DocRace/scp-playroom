@@ -87,6 +87,8 @@ def _apply_roster_row_tags(tree: ttk.Treeview) -> None:
     tree.tag_configure("st_dead", background="#2a1518", foreground="#f0a8a8")
     tree.tag_configure("st_active", background="#141a2e", foreground="#a8c4ff")
     tree.tag_configure("st_muted", background="#0f0f1a", foreground="#7a7a8a")
+    # Matches map cyan dashed ring (#3dd6e0) for the agent currently stepping in this tick.
+    tree.tag_configure("tick_active", background="#0d2f36", foreground="#6ee8f0")
 
 
 def _short_ollama_url(url: str, max_len: int = 36) -> str:
@@ -283,7 +285,11 @@ class SiteMapApp:
             foreground="#eaeaea",
             font=("Helvetica", 9, "bold"),
         )
-        style.map("SZ.Treeview", background=[("selected", "#3d5580")], foreground=[("selected", "#ffffff")])
+        style.map(
+            "SZ.Treeview",
+            background=[("selected", "#3d5580")],
+            foreground=[("selected", "#ffffff")],
+        )
 
         def _make_roster_tree(parent: tk.Frame, heading: str) -> ttk.Treeview:
             tk.Label(
@@ -711,6 +717,9 @@ class SiteMapApp:
         if self._map_highlight_eid and self._map_highlight_eid not in entities:
             self._map_highlight_eid = None
 
+        tick_active_raw = meta.get("tick_active_agent")
+        tick_active: str | None = tick_active_raw if isinstance(tick_active_raw, str) else None
+
         scp_rows: list[tuple[tuple[str, str, str, str, str], str]] = []
         d_rows: list[tuple[tuple[str, str, str, str, str], str]] = []
         for eid in sorted(entities):
@@ -728,9 +737,6 @@ class SiteMapApp:
                 scp_rows.append((row_vals, tag))
             elif str(eid).startswith("D-") and ent.get("kind") == "d_class":
                 d_rows.append((row_vals, tag))
-
-        tick_active_raw = meta.get("tick_active_agent")
-        tick_active: str | None = tick_active_raw if isinstance(tick_active_raw, str) else None
 
         for eid, ent in sorted(entities.items()):
             if ent.get("kind") != "scp":
@@ -846,7 +852,11 @@ class SiteMapApp:
                 for iid in tree.get_children():
                     tree.delete(iid)
                 for row_vals, tag in rows:
-                    tree.insert("", tk.END, values=row_vals, tags=(tag,))
+                    eid_cell = str(row_vals[0])
+                    row_tags: tuple[str, ...] = (tag,)
+                    if tick_active and eid_cell == tick_active:
+                        row_tags = (tag, "tick_active")
+                    tree.insert("", tk.END, values=row_vals, tags=row_tags)
             self._restore_roster_tree_selection()
         finally:
             self._roster_repainting = False
