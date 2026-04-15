@@ -183,6 +183,25 @@ def _room_centers(
     return out_fb
 
 
+def _parse_light_level(room_blob: dict[str, Any] | None) -> float:
+    if not room_blob:
+        return 0.62
+    try:
+        return max(0.0, min(1.0, float(room_blob.get("light_level", 0.62))))
+    except (TypeError, ValueError):
+        return 0.62
+
+
+def _room_fill_for_light(light_level: float) -> str:
+    """Slightly brighten room tile when lights are up (same hue family as base #1a2238)."""
+    base_r, base_g, base_b = 0x1A, 0x22, 0x38
+    f = 0.42 + 0.58 * light_level
+    r = int(min(255, base_r * f))
+    g = int(min(255, base_g * f))
+    b = int(min(255, base_b * f))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
 class SiteMapApp:
     def __init__(
         self,
@@ -229,7 +248,25 @@ class SiteMapApp:
         )
         self.lbl_warn.pack(side=tk.RIGHT)
 
-        outer = tk.PanedWindow(
+        self._map_legend_full = (
+            "Map: room darkness ∝ light; amber outline = locked. "
+            "On each link, a dot toward a room = that room is locked (extra noise loss into it when sound crosses from the neighbor). "
+            "dB pair (alphabetical room id order) = nominal loss when noise leaves each end. "
+            "Passage is not movement-blocked by locks in this build."
+        )
+        self._map_legend = tk.Label(
+            root,
+            text=self._map_legend_full,
+            fg="#7a8fb8",
+            bg="#1a1a2e",
+            font=("Helvetica", 8),
+            anchor="w",
+            justify=tk.LEFT,
+            wraplength=1180,
+        )
+        self._map_legend.pack(fill=tk.X, padx=10, pady=(0, 2))
+
+        self._outer = tk.PanedWindow(
             root,
             orient=tk.VERTICAL,
             bg="#1a1a2e",
@@ -237,10 +274,10 @@ class SiteMapApp:
             sashrelief=tk.FLAT,
             bd=0,
         )
-        outer.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+        self._outer.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
 
-        upper = tk.Frame(outer, bg="#1a1a2e")
-        outer.add(upper, minsize=380, stretch="always")
+        upper = tk.Frame(self._outer, bg="#1a1a2e")
+        self._outer.add(upper, minsize=380, stretch="always")
 
         body = tk.Frame(upper, bg="#1a1a2e")
         body.pack(fill=tk.BOTH, expand=True)
@@ -357,8 +394,8 @@ class SiteMapApp:
             borderwidth=0,
         )
 
-        chat_shell = tk.Frame(outer, bg="#12121c")
-        outer.add(chat_shell, minsize=200, stretch="always")
+        chat_shell = tk.Frame(self._outer, bg="#12121c")
+        self._outer.add(chat_shell, minsize=200, stretch="always")
         self._chat_messages: dict[str, list[dict[str, str]]] = {}
         self._chat_busy = False
         self._chat_entity_var = tk.StringVar(value="")
@@ -632,6 +669,10 @@ class SiteMapApp:
 
     def _draw_frame(self) -> None:
         if self._memory and not self._shared_memory_with_sim:
+            try:
+                self._map_legend.pack_forget()
+            except tk.TclError:
+                pass
             self.lbl_warn.config(
                 text="In-memory store — use Redis + second terminal, or run with --live.",
             )
@@ -653,6 +694,9 @@ class SiteMapApp:
             return
 
         self.txt_help.pack_forget()
+        if not self._map_legend.winfo_ismapped():
+            self._map_legend.pack(fill=tk.X, padx=10, pady=(0, 2), before=self._outer)
+        self._map_legend.config(text=self._map_legend_full)
 
         if self._shared_memory_with_sim:
             self.lbl_warn.config(text="Embedded sim — shared memory (no Redis)")
@@ -671,6 +715,7 @@ class SiteMapApp:
         )
 
         graph = room_graph_for_meta(meta)
+        rooms_live: dict[str, dict[str, Any]] = self.store.get_rooms() or {}
         cw = int(self.canvas.winfo_width() or 720)
         ch = int(self.canvas.winfo_height() or 560)
         if cw < 50 or ch < 50:
@@ -691,22 +736,93 @@ class SiteMapApp:
                     continue
                 drawn_e.add((a, b))
                 p2 = centers.get(nb)
-                if p2:
-                    self.canvas.create_line(cx, cy, p2[0], p2[1], fill="#2a3550", width=1)
+                if not p2:
+                    continue
+                r_lo, r_hi = (rid, nb) if rid < nb else (nb, rid)
+                loss_lo = float(graph.get(r_lo, {}).get("sound_loss_db", 18.0))
+                loss_hi = float(graph.get(r_hi, {}).get("sound_loss_db", 18.0))
+                lock_into_rid = bool(rooms_live.get(rid, {}).get("is_locked"))
+                lock_into_nb = bool(rooms_live.get(nb, {}).get("is_locked"))
+                self.canvas.create_line(
+                    cx, cy, p2[0], p2[1],
+                    fill="#2f3d5c",
+                    width=1,
+                    tags=("passage",),
+                )
+                mx = (cx + p2[0]) / 2.0
+                my = (cy + p2[1]) / 2.0
+                dx = p2[0] - cx
+                dy = p2[1] - cy
+                ln = math.hypot(dx, dy) or 1.0
+                ux, uy = dx / ln, dy / ln
+                d_mark = min(16.0, ln * 0.24)
+                # Toward rid: sound entering ``rid`` is penalized if ``rid`` is locked (neighbor perspective).
+                sx_r = mx - ux * d_mark
+                sy_r = my - uy * d_mark
+                sx_n = mx + ux * d_mark
+                sy_n = my + uy * d_mark
+                r_open, r_fill, r_w = ("#4a5568", "#141820", 1) if not lock_into_rid else ("#c98a4a", "#6b3d12", 1)
+                n_open, n_fill, n_w = ("#4a5568", "#141820", 1) if not lock_into_nb else ("#c98a4a", "#6b3d12", 1)
+                self.canvas.create_oval(
+                    sx_r - 4, sy_r - 4, sx_r + 4, sy_r + 4,
+                    outline=r_open, fill=r_fill, width=r_w, tags=("passage",),
+                )
+                self.canvas.create_oval(
+                    sx_n - 4, sy_n - 4, sx_n + 4, sy_n + 4,
+                    outline=n_open, fill=n_fill, width=n_w, tags=("passage",),
+                )
+                px, py = -uy, ux
+                tdx, tdy = px * 13.0, py * 13.0
+                self.canvas.create_text(
+                    mx + tdx,
+                    my + tdy,
+                    text=f"{loss_lo:.0f}·{loss_hi:.0f}",
+                    fill="#4d5c78",
+                    font=("Helvetica", 6),
+                    tags=("passage",),
+                )
 
         for rid, (cx, cy) in centers.items():
             x0, y0 = cx - rw / 2, cy - rh / 2
             x1, y1 = cx + rw / 2, cy + rh / 2
             self._room_rects[rid] = (x0, y0, x1, y1)
+            rb = rooms_live.get(rid, {})
+            locked_here = bool(rb.get("is_locked"))
+            lit = _parse_light_level(rb if rb else None)
+            fill_col = _room_fill_for_light(lit)
+            outline_col = "#c9a06a" if locked_here else "#3a4a6e"
+            outline_w = 2 if locked_here else 1
             self.canvas.create_rectangle(
                 x0, y0, x1, y1,
-                outline="#3a4a6e",
-                fill="#1a2238",
-                width=1,
+                outline=outline_col,
+                fill=fill_col,
+                width=outline_w,
                 tags=("room", rid),
             )
             short = rid.replace("con-", "C-").replace("site-", "")[:14]
             self.canvas.create_text(cx, cy - rh / 2 - 8, text=short, fill="#8899bb", font=("Helvetica", 8))
+            lit_pct = int(round(lit * 100.0))
+            self.canvas.create_text(
+                cx, cy + rh / 2 - 10,
+                text=f"{lit_pct}%",
+                fill="#6a7a9a",
+                font=("Helvetica", 7),
+                tags=("room", rid),
+            )
+            tags_list = rb.get("tags") if isinstance(rb.get("tags"), list) else []
+            tag_hint = ""
+            if tags_list:
+                t0 = str(tags_list[0])
+                if t0 and t0 != "standard":
+                    tag_hint = t0[:11]
+            if tag_hint:
+                self.canvas.create_text(
+                    cx, cy + rh / 2 - 2,
+                    text=tag_hint,
+                    fill="#5a6988",
+                    font=("Helvetica", 6),
+                    tags=("room", rid),
+                )
 
         entities: dict[str, dict[str, Any]] = {}
         for eid in self.store.list_entity_ids():
