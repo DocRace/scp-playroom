@@ -50,6 +50,7 @@ Useful flags:
 | `--ticks N`     | Stop after N ticks                                   |
 | `--memory`      | In-process store only (no Redis) — **GUI won’t sync** |
 | `--rules-only`  | No Ollama; deterministic rules                       |
+| `--narrative`   | Ollama one-line narrative per tick (slow)            |
 | `--gui`         | Open Tkinter live map (needs Redis + running sim)    |
 | `--live`        | Sim + map in one process (shared memory; no Redis)   |
 | `--site minimal`| Small 173 sandbox instead of full site               |
@@ -75,7 +76,7 @@ Edit `site-zero/config.yaml`, or override with environment variables, for exampl
 
 - **Full preset**: hub-and-spoke site graph, many rooms, a roster of iconic SCP-style entities with simple per-tick rules, ~20 D-class subjects, SCP-079 site controls, SCP-173 with line-of-sight physics.
 - **Minimal preset**: legacy two-room style sandbox for SCP-173.
-- **Live map**: `--live` (in-process) or `--gui` + Redis; shows entity positions and last action lines each tick.
+- **Live map** (`--live` or `--gui` + Redis): positions, SCP/D-class roster, optional **entity chat** when Ollama is up, and **room / passage** overlays — brightness ∝ `light_level`, amber outline when `is_locked`, room **tags** when not generic, and on each edge markers + a **dB pair** aligned with the acoustic graph (see the GUI legend). Locks change noise propagation, not movement, in this build.
 
 ## Troubleshooting
 
