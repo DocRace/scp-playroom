@@ -13,8 +13,16 @@ import tkinter.ttk as ttk
 from pathlib import Path
 from typing import Any
 
-from site_zero.gui_tk.entity_personas import build_chat_system_prompt
+from site_zero.agents.scp079_graph import execute_scp079_actions, sanitize_scp079_actions
+from site_zero.gui_tk.entity_personas import (
+    build_chat_system_prompt,
+    build_scp079_chat_tool_system_prompt,
+    facility_wide_light_actions,
+    global_facility_light_intent,
+    strip_html_tags,
+)
 from site_zero.gui_tk.roleplay_client import ollama_roleplay_chat
+from site_zero.ollama_client import ollama_chat_json_sync
 from site_zero.perception_pov import pov_snapshot_for_entity
 from site_zero.settings import AppSettings, load_settings
 from site_zero.world.layout import room_graph_for_meta
@@ -218,6 +226,24 @@ def _light_level_text_color(light_level: float) -> str:
     g = int(88 + (224 - 88) * lv)
     b = int(120 + (238 - 120) * lv)
     return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _scp079_chat_rooms_payload(store: WorldStateStore) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for rid, blob in (store.get_rooms() or {}).items():
+        if not isinstance(blob, dict):
+            continue
+        out[str(rid)] = {
+            "light_level": blob.get("light_level"),
+            "is_locked": blob.get("is_locked"),
+            "tags": blob.get("tags", []),
+        }
+    return out
+
+
+def _scp079_chat_meta_telemetry(meta: dict[str, Any]) -> dict[str, Any]:
+    keys = ("last_noise_by_room", "site_preset", "sim_tick", "tick_phase")
+    return {k: meta[k] for k in keys if k in meta}
 
 
 def _light_bar_colors(light_level: float) -> tuple[str, str]:
@@ -460,6 +486,19 @@ class SiteMapApp:
             bg="#12121c",
             font=("Helvetica", 9, "bold"),
         ).pack(anchor="w", padx=8, pady=(6, 2))
+        tk.Label(
+            parent,
+            text=(
+                "Note: SCP-079 uses JSON tool mode — when the model returns actions, lights/locks apply to the live world "
+                "immediately (same as tick tools). All other entities: roleplay only; map state follows the sim."
+            ),
+            fg="#7a8fb8",
+            bg="#12121c",
+            font=("Helvetica", 8),
+            anchor="w",
+            justify=tk.LEFT,
+            wraplength=1180,
+        ).pack(anchor="w", padx=8, pady=(0, 4))
 
         row = tk.Frame(parent, bg="#12121c")
         row.pack(fill=tk.X, padx=8, pady=(0, 4))
@@ -643,8 +682,6 @@ class SiteMapApp:
             except (TypeError, ValueError):
                 tick_i = 0
             ent = self.store.get_entity(eid)
-            pov = pov_snapshot_for_entity(self.store, eid, tick=tick_i)
-            system = build_chat_system_prompt(eid, ent, sim_tick=tick_i, pov_snapshot=pov)
             api_messages = [
                 {"role": m["role"], "content": m["content"]}
                 for m in hist
@@ -652,6 +689,75 @@ class SiteMapApp:
             ]
             api_messages = api_messages[-24:]
             tout = min(120.0, float(self.settings.ollama.timeout_seconds))
+
+            if eid == "SCP-079":
+                system079 = build_scp079_chat_tool_system_prompt(
+                    sim_tick=tick_i,
+                    rooms_payload=_scp079_chat_rooms_payload(self.store),
+                    meta_telemetry=_scp079_chat_meta_telemetry(meta),
+                )
+                try:
+                    data = ollama_chat_json_sync(
+                        self.settings.ollama.base_url,
+                        self.settings.ollama.model,
+                        [{"role": "system", "content": system079}, *api_messages],
+                        timeout=tout,
+                        temperature=0.12,
+                        num_predict=8192,
+                    )
+                except Exception:
+                    pov_fb = pov_snapshot_for_entity(self.store, eid, tick=tick_i)
+                    system_fb = build_chat_system_prompt(
+                        eid, ent, sim_tick=tick_i, pov_snapshot=pov_fb
+                    )
+                    reply_fb = ollama_roleplay_chat(
+                        self.settings.ollama.base_url,
+                        self.settings.ollama.model,
+                        system_fb,
+                        api_messages,
+                        timeout=tout,
+                    )
+                    reply_fb = (
+                        f"{reply_fb}\n\n[System] JSON tool mode failed; no site changes applied this send."
+                    )
+                    self.root.after(0, lambda e=eid, r=reply_fb: self._finish_chat_round(e, r, None))
+                    return
+
+                reply079 = strip_html_tags(str(data.get("reply", "")))
+                if not reply079:
+                    reply079 = "(empty reply field in model JSON)"
+                raw_acts = data.get("actions")
+                model_list = (
+                    [a for a in raw_acts if isinstance(a, dict)]
+                    if isinstance(raw_acts, list)
+                    else []
+                )
+                last_user_text = ""
+                for m in reversed(hist):
+                    if m.get("role") == "user":
+                        last_user_text = str(m.get("content", ""))
+                        break
+                gintent = global_facility_light_intent(last_user_text)
+                rids = sorted(_scp079_chat_rooms_payload(self.store).keys())
+                if gintent and rids:
+                    cleaned = facility_wide_light_actions(gintent, rids)
+                    lock_extra = sanitize_scp079_actions(
+                        [a for a in model_list if a.get("tool") == "set_room_lock"]
+                    )
+                    cleaned = cleaned + lock_extra
+                    reply079 += f"\n\n[System] Facility-wide lighting: {gintent} → {len(rids)} rooms."
+                else:
+                    cleaned = sanitize_scp079_actions(model_list)
+                if cleaned:
+                    logs = execute_scp079_actions(self.store, cleaned)
+                    reply079 += "\n\n[System] Site tools:\n" + "\n".join(logs)
+                elif model_list:
+                    reply079 += "\n\n[System] actions[] had no valid tool calls (check room_id / schema)."
+                self.root.after(0, lambda e=eid, r=reply079: self._finish_chat_round(e, r, None))
+                return
+
+            pov = pov_snapshot_for_entity(self.store, eid, tick=tick_i)
+            system = build_chat_system_prompt(eid, ent, sim_tick=tick_i, pov_snapshot=pov)
             reply = ollama_roleplay_chat(
                 self.settings.ollama.base_url,
                 self.settings.ollama.model,

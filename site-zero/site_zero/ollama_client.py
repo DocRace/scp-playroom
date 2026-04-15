@@ -58,6 +58,13 @@ async def ollama_available(client: httpx.AsyncClient, base_url: str) -> bool:
         return False
 
 
+def _ollama_options(temperature: float, num_predict: int | None) -> dict[str, Any]:
+    opts: dict[str, Any] = {"temperature": temperature}
+    if num_predict is not None:
+        opts["num_predict"] = int(num_predict)
+    return opts
+
+
 async def ollama_chat_json(
     client: httpx.AsyncClient,
     base_url: str,
@@ -66,6 +73,7 @@ async def ollama_chat_json(
     *,
     timeout: float = 120.0,
     temperature: float = 0.25,
+    num_predict: int | None = None,
 ) -> dict[str, Any]:
     """
     Ollama /api/chat with JSON mode — returns parsed object from assistant message.content.
@@ -76,11 +84,48 @@ async def ollama_chat_json(
         "messages": messages,
         "stream": False,
         "format": "json",
-        "options": {"temperature": temperature},
+        "options": _ollama_options(temperature, num_predict),
     }
     r = await client.post(url, json=payload, timeout=timeout)
     r.raise_for_status()
     data = r.json()
+    content = data.get("message", {}).get("content", "")
+    if isinstance(content, dict):
+        return content
+    if not isinstance(content, str) or not content.strip():
+        return {}
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        start = content.find("{")
+        end = content.rfind("}")
+        if start >= 0 and end > start:
+            return json.loads(content[start : end + 1])
+        raise
+
+
+def ollama_chat_json_sync(
+    base_url: str,
+    model: str,
+    messages: list[dict[str, str]],
+    *,
+    timeout: float = 120.0,
+    temperature: float = 0.2,
+    num_predict: int | None = None,
+) -> dict[str, Any]:
+    """Synchronous /api/chat with JSON format — same behavior as ``ollama_chat_json``."""
+    url = f"{base_url.rstrip('/')}/api/chat"
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "format": "json",
+        "options": _ollama_options(temperature, num_predict),
+    }
+    with httpx.Client(timeout=timeout) as client:
+        r = client.post(url, json=payload)
+        r.raise_for_status()
+        data = r.json()
     content = data.get("message", {}).get("content", "")
     if isinstance(content, dict):
         return content
@@ -104,6 +149,7 @@ def ollama_generate_sync(
     timeout: float = 120.0,
     temperature: float = 0.2,
     json_mode: bool = False,
+    num_predict: int | None = None,
 ) -> str:
     """Synchronous generate — used inside LangGraph sync nodes (SCP-079 planner)."""
     url = f"{base_url.rstrip('/')}/api/generate"
@@ -111,7 +157,7 @@ def ollama_generate_sync(
         "model": model,
         "prompt": prompt,
         "stream": False,
-        "options": {"temperature": temperature},
+        "options": _ollama_options(temperature, num_predict),
     }
     if json_mode:
         payload["format"] = "json"

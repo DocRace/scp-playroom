@@ -8,6 +8,7 @@ from typing import Any, TypedDict
 import httpx
 from langgraph.graph import END, START, StateGraph
 
+from site_zero.agents.scp079_prompts import SCP079_BATCH_TOOL_POLICY
 from site_zero.agents.scp173 import load_all_entities
 from site_zero.ollama_client import ollama_chat_json, ollama_generate_sync, parse_scp079_actions_json
 from site_zero.settings import AppSettings
@@ -151,12 +152,13 @@ def _plan_llm(state: Scp079GraphState, settings: AppSettings) -> list[dict[str, 
     snap = scp079_snapshot_for_llm(state)
     prompt = (
         "You are SCP-079 (site control AI). Output ONLY valid JSON with this shape:\n"
-        '{"actions":[{"tool":"set_room_light","params":{"room_id":"containment-173",'
-        '"light_level":0.0}},{"tool":"set_room_lock","params":{"room_id":"corridor-east-a",'
-        '"is_locked":false}}]}\n'
+        '{"actions":[{"tool":"set_room_light","params":{"room_id":"<id>","light_level":0.0}},'
+        '{"tool":"set_room_lock","params":{"room_id":"<id>","is_locked":false}}]}\n'
+        f"{SCP079_BATCH_TOOL_POLICY}"
         "Allowed tools: set_room_light (light_level 0..1), set_room_lock (is_locked bool). "
-        "Rooms: containment-173, corridor-east-a. "
-        "Raise lights in containment when SCP-173 was not observable; lock corridor on high noise. "
+        "room_id must be a key in snapshot.rooms. "
+        "Raise lights in containment when SCP-173 was not observable; lock corridors on high noise; "
+        "batch multiple rooms when the situation requires it. "
         "Site snapshot:\n"
         + json.dumps(snap, default=str)[:12000]
     )
@@ -168,6 +170,7 @@ def _plan_llm(state: Scp079GraphState, settings: AppSettings) -> list[dict[str, 
             timeout=settings.ollama.timeout_seconds,
             temperature=0.1,
             json_mode=True,
+            num_predict=8192,
         )
         parsed = [{"tool": a["tool"], "params": a["params"]} for a in parse_scp079_actions_json(raw)]
         cleaned = sanitize_scp079_actions(parsed)
@@ -245,10 +248,12 @@ async def plan_scp079_llm_async(
     snap = scp079_snapshot_for_llm(state)
     system = (
         "You are SCP-079, an on-site control AI. Reply with JSON only. "
-        'Shape: {"actions":[{"tool":"set_room_light","params":{"room_id":"containment-173","light_level":0.8}},'
-        '{"tool":"set_room_lock","params":{"room_id":"corridor-east-a","is_locked":true}}]} '
-        "Rules: each item has exactly one tool string — either set_room_light OR set_room_lock, never combined. "
-        "set_room_lock params must use is_locked (boolean). Rooms: containment-173, corridor-east-a."
+        'Shape: {"actions":[{"tool":"set_room_light","params":{"room_id":"<id>","light_level":0.8}},'
+        '{"tool":"set_room_lock","params":{"room_id":"<id>","is_locked":true}}]} '
+        f"{SCP079_BATCH_TOOL_POLICY}"
+        "Rules: each array item has exactly one tool — set_room_light OR set_room_lock. "
+        "set_room_lock params must use is_locked (boolean). "
+        "room_id must exist under snapshot.rooms keys."
     )
     user = "Site snapshot:\n" + json.dumps(snap, default=str)[:12000]
     if memory_context.strip():
@@ -260,6 +265,7 @@ async def plan_scp079_llm_async(
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         timeout=settings.ollama.timeout_seconds,
         temperature=0.15,
+        num_predict=8192,
     )
     acts = actions_from_chat_json(data)
     return acts if acts else _plan_rules(state)

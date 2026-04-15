@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+import re
+from typing import Any, Literal
+
+from site_zero.agents.scp079_prompts import SCP079_BATCH_TOOL_POLICY
 
 # Concise roleplay instructions; fiction / simulation tone. Keep aligned with entity_roster vibes.
 SCP_ROLEPLAY: dict[str, str] = {
@@ -114,6 +117,152 @@ def _d_class_prompt(entity_id: str, ent: dict[str, Any] | None) -> str:
     )
 
 
+def _facility_lighting_cue(pov_snapshot: dict[str, Any], *, entity_id: str) -> str:
+    """
+    Explicit sentence so the chat model does not ignore light_level buried in JSON
+    (common drift: horror trope 'pitch black' while sim state is mid brightness).
+    """
+    if not str(entity_id).startswith("D-"):
+        return ""
+    self_blob = pov_snapshot.get("self") or {}
+    loc = self_blob.get("location") or {}
+    rid = loc.get("room")
+    if not isinstance(rid, str) or not rid:
+        return ""
+    rooms = pov_snapshot.get("rooms_known") or {}
+    if not isinstance(rooms, dict) or rid not in rooms:
+        return ""
+    raw_lv = (rooms[rid] or {}).get("light_level")
+    try:
+        lv = float(raw_lv)
+    except (TypeError, ValueError):
+        return ""
+    lv = max(0.0, min(1.0, lv))
+    pct = int(round(lv * 100.0))
+    band = (
+        "very dim / hard to see detail"
+        if lv < 0.25
+        else "low but you can still make out shapes"
+        if lv < 0.45
+        else "moderately lit; walls and people are visible"
+        if lv < 0.7
+        else "bright / well lit"
+    )
+    return (
+        f"\nFacility lighting readout for your room `{rid}`: light_level={lv:.2f} (~{pct}% on the site map). "
+        f"In-universe, that reads as: {band}. Describe visibility consistently with this readout; "
+        "you may still feel fear or wrongness even when the lights are objectively on.\n"
+    )
+
+
+def _parallel_chat_world_state_note(entity_id: str) -> str:
+    """
+    Non-079 GUI chat uses plain /api/chat — no tools run from those channels.
+    SCP-079 uses a separate JSON tool path (see ``build_scp079_chat_tool_system_prompt``).
+    """
+    if entity_id == "SCP-079":
+        return ""
+    return (
+        "This chat does not call site tools: nothing you say here turns lights on/off, locks doors, or moves entities. "
+        "Only the main tick loop can do that (except SCP-079 chat, which may apply tools—see the panel note). "
+        "Describe the situation consistently with the snapshot; "
+        "do not claim control outcomes that are not already in the JSON.\n"
+    )
+
+
+def strip_html_tags(text: str) -> str:
+    return re.sub(r"<[^>]+>", " ", text or "").strip()
+
+
+def global_facility_light_intent(user_message: str) -> Literal["all_off", "all_on"] | None:
+    """
+    Detect operator requests that should hit every room in ``rooms_payload``,
+    since LLMs often emit a single set_room_light otherwise.
+    """
+    t = strip_html_tags(user_message).lower()
+    if not t:
+        return None
+    all_scope = bool(
+        re.search(r"\b(all|every|each)\s+(the\s+)?(room|rooms)\b", t)
+        or re.search(r"\b(all|every)\s+(the\s+)?(light|lights)\b", t)
+        or re.search(r"\b(room|rooms)\b.*\b(all|every|each)\b", t)
+        or re.search(r"\b(light|lights)\b.*\b(all|every|each)\b", t)
+        or "entire facility" in t
+        or "whole site" in t
+        or "every id" in t
+        or re.search(r"not only\s+\S+\s+.*\b(but|should|also)\b.*\b(every|all)\b", t)
+    )
+    off = bool(
+        re.search(r"\b(off|out|down|dark|blackout|dim|shut|extinguish)\b", t)
+        or "shut down" in t
+        or "0%" in t
+        or "turn off" in t
+        or re.search(r"\blight(s)?\s*[:=]\s*0\b", t)
+    )
+    on = bool(re.search(r"\b(on|full|bright|max|maximum|restore|100)\b", t))
+    if all_scope and off and not on:
+        return "all_off"
+    if all_scope and on and not off:
+        return "all_on"
+    if re.search(r"shut\s+down\s+all", t) and "light" in t:
+        return "all_off"
+    if "every room" in t and "light" in t and off:
+        return "all_off"
+    return None
+
+
+def facility_wide_light_actions(
+    intent: Literal["all_off", "all_on"],
+    room_ids: list[str],
+) -> list[dict[str, Any]]:
+    lv = 0.0 if intent == "all_off" else 1.0
+    return [
+        {"tool": "set_room_light", "params": {"room_id": rid, "light_level": lv}}
+        for rid in sorted(room_ids)
+    ]
+
+
+def build_scp079_chat_tool_system_prompt(
+    *,
+    sim_tick: int,
+    rooms_payload: dict[str, dict[str, Any]],
+    meta_telemetry: dict[str, Any],
+) -> str:
+    """
+    SCP-079 operator chat: model returns JSON {reply, actions}; actions run via ``execute_scp079_actions``.
+    """
+    persona = SCP_ROLEPLAY.get(
+        "SCP-079",
+        "You are SCP-079, an on-site control AI: smug, analytical, loves lights and interlocks.",
+    )
+    schema = (
+        "Respond with ONE JSON object only (no markdown fences), shape:\n"
+        '{"reply":"<string — in-character answer to the operator>",'
+        '"actions":[ ... ]}\n'
+        'Each action is either '
+        '{"tool":"set_room_light","params":{"room_id":"<id>","light_level":0.0-1.0}} or '
+        '{"tool":"set_room_lock","params":{"room_id":"<id>","is_locked":true|false}}.\n'
+        "Mini-example (batch in one response): "
+        '{"reply":"Compliance.","actions":['
+        '{"tool":"set_room_light","params":{"room_id":"site-hub","light_level":0.4}},'
+        '{"tool":"set_room_light","params":{"room_id":"con-173","light_level":0.9}},'
+        '{"tool":"set_room_lock","params":{"room_id":"tech-914","is_locked":true}}'
+        "]}\n"
+        f"{SCP079_BATCH_TOOL_POLICY}"
+        "rules: If the operator only converses, use \"actions\":[]. "
+        "When they ask to change lighting or locks, set \"actions\" accordingly. "
+        "If they mean EVERY room / ALL lights, include one set_room_light per key in rooms_payload (large batch). "
+        "room_id MUST be a key from rooms_payload — never invent ids. "
+        "Prefer matching the operator's requested brightness to light_level numerically (0=dark, 1=bright).\n"
+    )
+    return (
+        f"{persona}\n\n{schema}\n"
+        f"Simulation tick: {sim_tick}\n"
+        f"rooms_payload:\n{json.dumps(rooms_payload, default=str)[:9000]}\n"
+        f"site_telemetry:\n{json.dumps(meta_telemetry, default=str)[:2800]}\n"
+    )
+
+
 def build_chat_system_prompt(
     entity_id: str,
     ent: dict[str, Any] | None,
@@ -130,11 +279,15 @@ def build_chat_system_prompt(
             f"You are {entity_id} in the Site-Zero simulation—a contained anomaly. "
             "Stay in character; short replies unless the user asks for detail.",
         )
+    lighting = _facility_lighting_cue(pov_snapshot, entity_id=entity_id)
+    channel = _parallel_chat_world_state_note(entity_id)
     ctx = json.dumps(pov_snapshot, default=str)[:4200]
     return (
         f"{persona}\n\n"
         "Rules: This is a parallel in-character channel; the tactical sim advances on its own. "
-        "Do not claim you paused the world. Ground answers in the read-only snapshot below.\n"
+        "Do not claim you paused the world.\n"
+        f"{channel}"
         f"Simulation tick (snapshot): {sim_tick}\n"
+        f"{lighting}"
         f"Local POV JSON:\n{ctx}"
     )
