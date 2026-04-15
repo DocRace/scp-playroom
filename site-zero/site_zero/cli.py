@@ -103,7 +103,9 @@ def main() -> None:
 
     if args.live:
         from site_zero.gui_map import run_gui_live
+        from site_zero.live_lock import acquire_live_instance_lock
 
+        acquire_live_instance_lock()
         run_gui_live(settings, max_ticks=args.ticks, verbose=args.verbose)
         return
     if args.gui:

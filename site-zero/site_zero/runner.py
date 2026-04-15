@@ -22,6 +22,7 @@ from site_zero.perception_pov import pov_snapshot_json_for_recall
 from site_zero.scps.tick_dispatch import dispatch_scp_ticks_except_173
 from site_zero.seed import ensure_world_seed
 from site_zero.settings import AppSettings
+from site_zero.tick_signals import set_tick_active_agent
 from site_zero.world_state import MemoryWorldState, WorldStateStore, connect_world_state, reset_redis_world_state
 
 _stdout_ok: bool = True
@@ -108,6 +109,7 @@ def _finalize_tick_meta(store: WorldStateStore, events: list[dict[str, Any]], *,
     meta["last_status"] = status
     meta["sim_tick"] = tick
     meta["tick_phase"] = "idle"
+    meta.pop("tick_active_agent", None)
     store.set_meta(meta)
 
 
@@ -200,7 +202,9 @@ async def run_simulation(
 
             mem079 = ""
             mem173 = ""
-            if memory:
+            if tick_settings.scp079.enabled:
+                set_tick_active_agent(store, "SCP-079")
+            if memory and tick_settings.scp079.enabled:
                 st079 = observe_scp079_state(store, tick)
                 q079 = f"SCP-079 site tick {tick} " + json.dumps(
                     scp079_snapshot_for_llm(st079),
@@ -226,6 +230,7 @@ async def run_simulation(
                     events_to_snippet(ev079),
                     {"tick": tick, "kind": "scp079"},
                 )
+            set_tick_active_agent(store, None)
 
             entities = load_all_entities(store)
             d_ids = sorted(
@@ -235,6 +240,7 @@ async def run_simulation(
             )
             noise_accum: list[dict[str, Any]] = list(ev079)
             for idx, d_id in enumerate(d_ids):
+                set_tick_active_agent(store, d_id)
                 use_llm_d = bool(tick_settings.agents.use_llm) and idx < int(
                     tick_settings.agents.d_class_llm_max
                 )
@@ -263,6 +269,7 @@ async def run_simulation(
                         events_to_snippet(ev_d),
                         {"tick": tick, "kind": "d_class"},
                     )
+                set_tick_active_agent(store, None)
 
             if tick_settings.agents.use_llm:
                 _log_line(
@@ -299,6 +306,7 @@ async def run_simulation(
 
             entities = load_all_entities(store)
             perception173 = render_entity_pov_context(store, "SCP-173", tick)
+            set_tick_active_agent(store, "SCP-173")
             if memory:
                 q173 = f"SCP-173 tick {tick} " + perception173[:3500]
                 lines173 = await memory.recall_lines(http, "SCP-173", q173)
@@ -322,6 +330,7 @@ async def run_simulation(
                     events_to_snippet(events173),
                     {"tick": tick, "kind": "scp173"},
                 )
+            set_tick_active_agent(store, None)
 
             _finalize_tick_meta(store, noise_accum, tick=tick)
 

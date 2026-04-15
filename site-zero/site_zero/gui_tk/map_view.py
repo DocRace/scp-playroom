@@ -360,8 +360,12 @@ class SiteMapApp:
 
         self.tree_scp.bind("<Double-1>", lambda _e: self._pick_chat_from_tree(self.tree_scp))
         self.tree_d.bind("<Double-1>", lambda _e: self._pick_chat_from_tree(self.tree_d))
+        self.tree_scp.bind("<<TreeviewSelect>>", lambda _e: self._on_roster_select(self.tree_scp))
+        self.tree_d.bind("<<TreeviewSelect>>", lambda _e: self._on_roster_select(self.tree_d))
 
         self._room_rects: dict[str, tuple[float, float, float, float]] = {}
+        self._map_highlight_eid: str | None = None
+        self._roster_repainting: bool = False
         self._poll_ms = 200
         self.root.after(self._poll_ms, self._refresh)
 
@@ -452,6 +456,46 @@ class SiteMapApp:
             return v.split()
         return []
 
+    def _on_roster_select(self, tree: ttk.Treeview) -> None:
+        """Single-click roster row: sticky map follow for that agent until you deselect the row."""
+        if self._roster_repainting:
+            return
+        sel = tree.selection()
+        if not sel:
+            self._map_highlight_eid = None
+            return
+        vals = tree.item(sel[0], "values")
+        if not vals:
+            self._map_highlight_eid = None
+            return
+        self._map_highlight_eid = str(vals[0])
+
+    def _restore_roster_tree_selection(self) -> None:
+        """After repopulating roster tables, re-select the followed entity so polling does not drop the gold highlight."""
+        follow = self._map_highlight_eid
+        try:
+            self.tree_scp.selection_remove(self.tree_scp.selection())
+        except tk.TclError:
+            pass
+        try:
+            self.tree_d.selection_remove(self.tree_d.selection())
+        except tk.TclError:
+            pass
+        if not follow:
+            return
+        for iid in self.tree_scp.get_children():
+            vals = self.tree_scp.item(iid, "values")
+            if vals and str(vals[0]) == follow:
+                self.tree_scp.selection_set(iid)
+                self.tree_scp.see(iid)
+                return
+        for iid in self.tree_d.get_children():
+            vals = self.tree_d.item(iid, "values")
+            if vals and str(vals[0]) == follow:
+                self.tree_d.selection_set(iid)
+                self.tree_d.see(iid)
+                return
+
     def _pick_chat_from_tree(self, tree: ttk.Treeview) -> None:
         sel = tree.selection()
         if not sel:
@@ -460,6 +504,7 @@ class SiteMapApp:
         if not vals:
             return
         eid = str(vals[0])
+        self._map_highlight_eid = eid
         values = self._combo_values_list(self.chat_combo)
         if eid in values:
             self.chat_combo.set(eid)
@@ -663,6 +708,9 @@ class SiteMapApp:
             if e:
                 entities[eid] = e
 
+        if self._map_highlight_eid and self._map_highlight_eid not in entities:
+            self._map_highlight_eid = None
+
         scp_rows: list[tuple[tuple[str, str, str, str, str], str]] = []
         d_rows: list[tuple[tuple[str, str, str, str, str], str]] = []
         for eid in sorted(entities):
@@ -681,6 +729,9 @@ class SiteMapApp:
             elif str(eid).startswith("D-") and ent.get("kind") == "d_class":
                 d_rows.append((row_vals, tag))
 
+        tick_active_raw = meta.get("tick_active_agent")
+        tick_active: str | None = tick_active_raw if isinstance(tick_active_raw, str) else None
+
         for eid, ent in sorted(entities.items()):
             if ent.get("kind") != "scp":
                 continue
@@ -696,15 +747,49 @@ class SiteMapApp:
                 mx = cw / 2
                 my = ch / 2
 
+            man = self._map_highlight_eid == eid
+            act = tick_active is not None and tick_active == eid
             r = 7
             self.canvas.create_oval(
-                mx - r, my - r, mx + r, my + r,
+                mx - r,
+                my - r,
+                mx + r,
+                my + r,
                 fill=_stable_color(eid),
-                outline="#ffffff",
-                width=1,
+                outline="#ffe8a0" if man else "#ffffff",
+                width=3 if man else 1,
             )
+            if act:
+                self.canvas.create_oval(
+                    mx - r - 5,
+                    my - r - 5,
+                    mx + r + 5,
+                    my + r + 5,
+                    outline="#3dd6e0",
+                    width=2,
+                    dash=(4, 4),
+                    fill="",
+                )
+            if man:
+                self.canvas.create_oval(
+                    mx - r - 9,
+                    my - r - 9,
+                    mx + r + 9,
+                    my + r + 9,
+                    outline="#ffcc33",
+                    width=3,
+                    fill="",
+                )
             label = eid.replace("SCP-", "").replace("____", "..")[:12]
-            self.canvas.create_text(mx + 12, my, text=label, fill="#e0e0e8", anchor="w", font=("Helvetica", 9))
+            label_fill = "#fff8e0" if man else "#e0e0e8"
+            self.canvas.create_text(
+                mx + 12,
+                my,
+                text=label,
+                fill=label_fill,
+                anchor="w",
+                font=("Helvetica", 9, "bold" if man else "normal"),
+            )
 
         for eid, ent in sorted(entities.items()):
             if ent.get("kind") != "d_class" or not str(eid).startswith("D-"):
@@ -722,18 +807,49 @@ class SiteMapApp:
             fill = "#4a6fa5" if alive else "#3d2020"
             outline = "#88aacc" if alive else "#cc4444"
             rd = 4
+            man = self._map_highlight_eid == eid
+            act = tick_active is not None and tick_active == eid
             self.canvas.create_rectangle(
-                mx - rd, my - rd, mx + rd, my + rd,
+                mx - rd,
+                my - rd,
+                mx + rd,
+                my + rd,
                 fill=fill,
-                outline=outline,
-                width=1,
+                outline="#ffe8a0" if man else outline,
+                width=3 if man else 1,
             )
+            if act:
+                self.canvas.create_rectangle(
+                    mx - rd - 5,
+                    my - rd - 5,
+                    mx + rd + 5,
+                    my + rd + 5,
+                    outline="#3dd6e0",
+                    width=2,
+                    dash=(4, 4),
+                    fill="",
+                )
+            if man:
+                self.canvas.create_rectangle(
+                    mx - rd - 9,
+                    my - rd - 9,
+                    mx + rd + 9,
+                    my + rd + 9,
+                    outline="#ffcc33",
+                    width=3,
+                    fill="",
+                )
 
-        for tree, rows in ((self.tree_scp, scp_rows), (self.tree_d, d_rows)):
-            for iid in tree.get_children():
-                tree.delete(iid)
-            for row_vals, tag in rows:
-                tree.insert("", tk.END, values=row_vals, tags=(tag,))
+        self._roster_repainting = True
+        try:
+            for tree, rows in ((self.tree_scp, scp_rows), (self.tree_d, d_rows)):
+                for iid in tree.get_children():
+                    tree.delete(iid)
+                for row_vals, tag in rows:
+                    tree.insert("", tk.END, values=row_vals, tags=(tag,))
+            self._restore_roster_tree_selection()
+        finally:
+            self._roster_repainting = False
         self._refresh_chat_targets()
         try:
             self.root.update_idletasks()

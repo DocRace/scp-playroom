@@ -10,6 +10,7 @@ import httpx
 from site_zero.memory.vector_memory import VectorAgentMemory, format_memory_prompt_block
 from site_zero.scps.episodic_context import build_scp_recall_query
 from site_zero.scps.ticks_top20 import SCP_TICK_ORDER_EXCEPT_173, TICK_REGISTRY
+from site_zero.tick_signals import set_tick_active_agent
 from site_zero.world_state import WorldStateStore
 
 
@@ -30,6 +31,7 @@ async def dispatch_scp_ticks_except_173(
             continue
         if store.get_entity(scp_id) is None:
             continue
+        set_tick_active_agent(store, scp_id)
         injected = False
         try:
             if roster_recall and memory is not None and http is not None:
@@ -56,6 +58,7 @@ async def dispatch_scp_ticks_except_173(
         except Exception as exc:
             out.append({"level": "error", "msg": f"{scp_id} tick failed: {exc}", "agent": scp_id})
         finally:
+            set_tick_active_agent(store, None)
             if injected:
                 meta = store.get_meta()
                 meta.pop("active_episodic", None)
