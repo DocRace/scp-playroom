@@ -8,10 +8,14 @@ import math
 import sys
 import threading
 import tkinter as tk
+import tkinter.scrolledtext as scrolledtext
 import tkinter.ttk as ttk
 from pathlib import Path
 from typing import Any
 
+from site_zero.gui_tk.entity_personas import build_chat_system_prompt
+from site_zero.gui_tk.roleplay_client import ollama_roleplay_chat
+from site_zero.perception_pov import pov_snapshot_for_entity
 from site_zero.settings import AppSettings, load_settings
 from site_zero.world.layout import room_graph_for_meta
 from site_zero.world_state import MemoryWorldState, WorldStateStore, connect_world_state
@@ -223,8 +227,21 @@ class SiteMapApp:
         )
         self.lbl_warn.pack(side=tk.RIGHT)
 
-        body = tk.Frame(root, bg="#1a1a2e")
-        body.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+        outer = tk.PanedWindow(
+            root,
+            orient=tk.VERTICAL,
+            bg="#1a1a2e",
+            sashwidth=6,
+            sashrelief=tk.FLAT,
+            bd=0,
+        )
+        outer.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+
+        upper = tk.Frame(outer, bg="#1a1a2e")
+        outer.add(upper, minsize=380, stretch="always")
+
+        body = tk.Frame(upper, bg="#1a1a2e")
+        body.pack(fill=tk.BOTH, expand=True)
 
         self.canvas = tk.Canvas(
             body,
@@ -334,9 +351,226 @@ class SiteMapApp:
             borderwidth=0,
         )
 
+        chat_shell = tk.Frame(outer, bg="#12121c")
+        outer.add(chat_shell, minsize=200, stretch="always")
+        self._chat_messages: dict[str, list[dict[str, str]]] = {}
+        self._chat_busy = False
+        self._chat_entity_var = tk.StringVar(value="")
+        self._setup_agent_chat(chat_shell)
+
+        self.tree_scp.bind("<Double-1>", lambda _e: self._pick_chat_from_tree(self.tree_scp))
+        self.tree_d.bind("<Double-1>", lambda _e: self._pick_chat_from_tree(self.tree_d))
+
         self._room_rects: dict[str, tuple[float, float, float, float]] = {}
         self._poll_ms = 200
         self.root.after(self._poll_ms, self._refresh)
+
+    def _setup_agent_chat(self, parent: tk.Frame) -> None:
+        """Bottom panel: select SCP or D-class, in-character chat (Ollama worker thread)."""
+        tk.Label(
+            parent,
+            text="In-character chat  ·  parallel to the sim (context refreshed each send)  ·  double-click roster row to pick",
+            fg="#a8b8d8",
+            bg="#12121c",
+            font=("Helvetica", 9, "bold"),
+        ).pack(anchor="w", padx=8, pady=(6, 2))
+
+        row = tk.Frame(parent, bg="#12121c")
+        row.pack(fill=tk.X, padx=8, pady=(0, 4))
+        tk.Label(row, text="Talk to:", fg="#c8c8d8", bg="#12121c", font=("Helvetica", 9)).pack(
+            side=tk.LEFT, padx=(0, 6)
+        )
+        self.chat_combo = ttk.Combobox(
+            row,
+            textvariable=self._chat_entity_var,
+            state="disabled",
+            width=28,
+        )
+        self.chat_combo.pack(side=tk.LEFT, padx=(0, 8))
+        self.chat_combo.bind("<<ComboboxSelected>>", lambda _e: self._render_chat_transcript())
+
+        self.chat_clear_btn = tk.Button(
+            row,
+            text="Clear log",
+            command=self._clear_active_chat,
+            font=("Helvetica", 9),
+            bg="#243054",
+            fg="#eaeaea",
+            activebackground="#3d5580",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+        )
+        self.chat_clear_btn.pack(side=tk.LEFT)
+
+        self.chat_log = scrolledtext.ScrolledText(
+            parent,
+            height=9,
+            bg="#0f0f1a",
+            fg="#d8d8e4",
+            insertbackground="#eaeaea",
+            font=("Helvetica", 10),
+            wrap=tk.WORD,
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        self.chat_log.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 4))
+        self.chat_log.config(state=tk.DISABLED)
+
+        bot = tk.Frame(parent, bg="#12121c")
+        bot.pack(fill=tk.X, padx=8, pady=(0, 8))
+        self.chat_entry = tk.Entry(
+            bot,
+            bg="#1a2238",
+            fg="#eaeaea",
+            insertbackground="#eaeaea",
+            font=("Helvetica", 10),
+            relief=tk.FLAT,
+        )
+        self.chat_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        self.chat_entry.bind("<Return>", lambda _e: self._send_chat_message())
+
+        self.chat_send_btn = tk.Button(
+            bot,
+            text="Send",
+            command=self._send_chat_message,
+            font=("Helvetica", 10, "bold"),
+            bg="#2e6f4f",
+            fg="#ffffff",
+            activebackground="#3d9070",
+            activeforeground="#ffffff",
+            relief=tk.FLAT,
+            state="disabled",
+        )
+        self.chat_send_btn.pack(side=tk.RIGHT)
+
+    @staticmethod
+    def _combo_values_list(combo: ttk.Combobox) -> list[str]:
+        v = combo.cget("values")
+        if isinstance(v, (tuple, list)):
+            return [str(x) for x in v]
+        if isinstance(v, str) and v.strip():
+            return v.split()
+        return []
+
+    def _pick_chat_from_tree(self, tree: ttk.Treeview) -> None:
+        sel = tree.selection()
+        if not sel:
+            return
+        vals = tree.item(sel[0], "values")
+        if not vals:
+            return
+        eid = str(vals[0])
+        values = self._combo_values_list(self.chat_combo)
+        if eid in values:
+            self.chat_combo.set(eid)
+            self._render_chat_transcript()
+
+    def _render_chat_transcript(self) -> None:
+        eid = self._chat_entity_var.get().strip()
+        self.chat_log.config(state=tk.NORMAL)
+        self.chat_log.delete("1.0", tk.END)
+        for m in self._chat_messages.get(eid, []):
+            who = "You" if m.get("role") == "user" else eid or "Entity"
+            self.chat_log.insert(tk.END, f"{who}: {m.get('content', '')}\n\n")
+        self.chat_log.see(tk.END)
+        self.chat_log.config(state=tk.DISABLED)
+
+    def _clear_active_chat(self) -> None:
+        eid = self._chat_entity_var.get().strip()
+        if eid:
+            self._chat_messages.pop(eid, None)
+        self._render_chat_transcript()
+
+    def _send_chat_message(self) -> None:
+        if self._chat_busy:
+            return
+        eid = self._chat_entity_var.get().strip()
+        text = self.chat_entry.get().strip()
+        if not eid or not text:
+            return
+        reach = self.store.get_meta().get("ollama_reachable")
+        if reach is False:
+            self._chat_messages.setdefault(eid, []).append(
+                {
+                    "role": "assistant",
+                    "content": "[Ollama unreachable — start the server or check config base_url.]",
+                }
+            )
+            self._render_chat_transcript()
+            return
+
+        self._chat_messages.setdefault(eid, []).append({"role": "user", "content": text})
+        self.chat_entry.delete(0, tk.END)
+        self._render_chat_transcript()
+        self._chat_busy = True
+        self.chat_send_btn.configure(state="disabled")
+        hist = [dict(x) for x in self._chat_messages[eid]]
+        threading.Thread(target=self._chat_worker, args=(eid, hist), daemon=True).start()
+
+    def _chat_worker(self, eid: str, hist: list[dict[str, str]]) -> None:
+        try:
+            meta = self.store.get_meta()
+            tick_raw = meta.get("sim_tick", 0)
+            try:
+                tick_i = int(tick_raw)
+            except (TypeError, ValueError):
+                tick_i = 0
+            ent = self.store.get_entity(eid)
+            pov = pov_snapshot_for_entity(self.store, eid, tick=tick_i)
+            system = build_chat_system_prompt(eid, ent, sim_tick=tick_i, pov_snapshot=pov)
+            api_messages = [
+                {"role": m["role"], "content": m["content"]}
+                for m in hist
+                if m.get("role") in ("user", "assistant")
+            ]
+            api_messages = api_messages[-24:]
+            tout = min(120.0, float(self.settings.ollama.timeout_seconds))
+            reply = ollama_roleplay_chat(
+                self.settings.ollama.base_url,
+                self.settings.ollama.model,
+                system,
+                api_messages,
+                timeout=tout,
+            )
+            self.root.after(0, lambda e=eid, r=reply: self._finish_chat_round(e, r, None))
+        except Exception as exc:
+            self.root.after(0, lambda e=eid, x=str(exc): self._finish_chat_round(e, None, x))
+
+    def _finish_chat_round(self, eid: str, assistant_text: str | None, err: str | None) -> None:
+        self._chat_busy = False
+        if err:
+            self._chat_messages.setdefault(eid, []).append({"role": "assistant", "content": f"[error] {err}"})
+        elif assistant_text:
+            self._chat_messages.setdefault(eid, []).append({"role": "assistant", "content": assistant_text})
+        if self._chat_entity_var.get().strip() == eid:
+            self._render_chat_transcript()
+        values = self._combo_values_list(self.chat_combo)
+        self.chat_send_btn.configure(state="normal" if values and not self._chat_busy else "disabled")
+
+    def _refresh_chat_targets(self) -> None:
+        if self._memory and not self._shared_memory_with_sim:
+            self.chat_combo.configure(values=[], state="disabled")
+            self._chat_entity_var.set("")
+            self.chat_send_btn.configure(state="disabled")
+            return
+        ids: list[str] = []
+        for eid in sorted(self.store.list_entity_ids()):
+            ent = self.store.get_entity(eid)
+            if not ent:
+                continue
+            if ent.get("kind") == "scp" or (str(eid).startswith("D-") and ent.get("kind") == "d_class"):
+                ids.append(eid)
+        self.chat_combo.configure(values=ids)
+        self.chat_combo.configure(state="readonly" if ids else "disabled")
+        cur = self._chat_entity_var.get().strip()
+        if cur not in ids:
+            if ids:
+                self.chat_combo.set(ids[0])
+                self._render_chat_transcript()
+            else:
+                self._chat_entity_var.set("")
+        if not self._chat_busy:
+            self.chat_send_btn.configure(state="normal" if ids else "disabled")
 
     def _refresh(self) -> None:
         try:
@@ -364,6 +598,7 @@ class SiteMapApp:
                 "• Redis: run `python -m site_zero` in another terminal, then `--gui`.\n"
                 "• Or one process: `python -m site_zero --live`\n",
             )
+            self._refresh_chat_targets()
             return
 
         self.txt_help.pack_forget()
@@ -499,6 +734,7 @@ class SiteMapApp:
                 tree.delete(iid)
             for row_vals, tag in rows:
                 tree.insert("", tk.END, values=row_vals, tags=(tag,))
+        self._refresh_chat_targets()
         try:
             self.root.update_idletasks()
         except tk.TclError:
@@ -511,7 +747,7 @@ def run_gui(*, config_path: Path | None = None) -> None:
     _silence_macos_imk_stderr()
     root = tk.Tk()
     SiteMapApp(root, store, settings)
-    root.minsize(1240, 620)
+    root.minsize(1240, 720)
     root.mainloop()
 
 
@@ -539,7 +775,7 @@ def run_gui_live(
     _silence_macos_imk_stderr()
     root = tk.Tk()
     SiteMapApp(root, shared, settings, shared_memory_with_sim=True)
-    root.minsize(1240, 620)
+    root.minsize(1240, 720)
     root.mainloop()
 
 
