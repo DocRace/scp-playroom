@@ -19,9 +19,10 @@ agents:
 
 ollama:
   base_url: "http://localhost:11434"
-  # Fast local trial: llama3.2 (~2GB). Heavy runs: SITE_ZERO_MODEL=deepseek-r1:32b
+  # Chat / JSON agents (079, D-class, 173). Uses local small model (same as embeddings below).
+  # Override: SITE_ZERO_MODEL=...
   model: "llama3.2:latest"
-  timeout_seconds: 120
+  timeout_seconds: 180
   # Optional one-line narrative per tick (adds latency); movement stays rule-based
   narrative_enabled: false
 
@@ -31,6 +32,8 @@ memory:
   chroma_path: "data/chroma_site_zero"
   embedding_model: "llama3.2:latest"
   recall_top_k: 6
+  # Per-roster-SCP Chroma recall + Ollama embed each tick (heavy). Default off for stability.
+  roster_recall: false
 
 paths:
   # Ollama stores weights under ~/.ollama/models (blobs + manifests). Not used at runtime.

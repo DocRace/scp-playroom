@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import math
+import sys
 import threading
 import tkinter as tk
 import tkinter.ttk as ttk
@@ -14,6 +15,32 @@ from typing import Any
 from site_zero.settings import AppSettings, load_settings
 from site_zero.world.layout import room_graph_for_meta
 from site_zero.world_state import MemoryWorldState, WorldStateStore, connect_world_state
+
+
+def _silence_macos_imk_stderr() -> None:
+    """Drop harmless Tk/InputMethodKit noise on macOS (stderr line from AppKit)."""
+    if sys.platform != "darwin":
+        return
+    real = sys.stderr
+
+    class _Filter:
+        __slots__ = ("_r",)
+
+        def __init__(self, r: Any) -> None:
+            self._r = r
+
+        def write(self, s: str) -> int:
+            if isinstance(s, str) and "IMKCFRunLoopWakeUpReliable" in s:
+                return len(s)
+            return self._r.write(s)
+
+        def flush(self) -> None:
+            self._r.flush()
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._r, name)
+
+    sys.stderr = _Filter(real)
 
 
 def _truncate_cell(s: str, max_len: int = 96) -> str:
@@ -56,6 +83,46 @@ def _apply_roster_row_tags(tree: ttk.Treeview) -> None:
     tree.tag_configure("st_dead", background="#2a1518", foreground="#f0a8a8")
     tree.tag_configure("st_active", background="#141a2e", foreground="#a8c4ff")
     tree.tag_configure("st_muted", background="#0f0f1a", foreground="#7a7a8a")
+
+
+def _short_ollama_url(url: str, max_len: int = 36) -> str:
+    u = str(url).replace("http://", "").replace("https://", "").rstrip("/")
+    if len(u) <= max_len:
+        return u
+    return u[: max_len - 1] + "…"
+
+
+def _ollama_banner(meta: dict[str, Any], settings: AppSettings) -> tuple[str, str]:
+    """Return (label_text, foreground_hex) for the top Ollama status strip."""
+    reach = meta.get("ollama_reachable")
+    model = str(meta.get("ollama_model") or settings.ollama.model or "—")
+    base = str(meta.get("ollama_base_url") or settings.ollama.base_url or "")
+    base_s = _short_ollama_url(base) if base else "—"
+    agents_cfg = bool(meta.get("agents_use_llm_config", settings.agents.use_llm))
+    scp079_cfg = bool(meta.get("scp079_use_llm_config", settings.scp079.use_llm))
+    narr_cfg = bool(meta.get("ollama_narrative_config", settings.ollama.narrative_enabled))
+
+    if reach is None:
+        return (
+            f"Ollama: waiting… ·  {base_s}  ·  model {model}",
+            "#8899bb",
+        )
+    if reach:
+        bits = ["Ollama: connected", base_s, model]
+        if agents_cfg or scp079_cfg:
+            bits.append("agent LLM on")
+        else:
+            bits.append("agent LLM off (config)")
+        if narr_cfg:
+            bits.append("narrative on")
+        return " ·  ".join(bits), "#8ee5b0"
+
+    bits2 = ["Ollama: unreachable", base_s]
+    if agents_cfg or scp079_cfg or narr_cfg:
+        bits2.append("using rules-only / narrative off")
+        return "  ·  ".join(bits2), "#ffaa66"
+    bits2.append("LLM features off (config)")
+    return "  ·  ".join(bits2), "#7a7a8a"
 
 
 def _stable_color(eid: str) -> str:
@@ -138,6 +205,15 @@ class SiteMapApp:
             font=("Helvetica", 12, "bold"),
         )
         self.lbl_tick.pack(side=tk.LEFT)
+        self.lbl_ollama = tk.Label(
+            top,
+            text="Ollama: …",
+            fg="#8899bb",
+            bg="#1a1a2e",
+            font=("Helvetica", 10),
+            anchor="w",
+        )
+        self.lbl_ollama.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(14, 8))
         self.lbl_warn = tk.Label(
             top,
             text="",
@@ -274,6 +350,8 @@ class SiteMapApp:
             self.lbl_warn.config(
                 text="In-memory store — use Redis + second terminal, or run with --live.",
             )
+            o_txt, o_fg = _ollama_banner({}, self.settings)
+            self.lbl_ollama.config(text=o_txt, fg=o_fg)
             self.canvas.delete("all")
             for tr in (self.tree_scp, self.tree_d):
                 for iid in tr.get_children():
@@ -296,6 +374,9 @@ class SiteMapApp:
             self.lbl_warn.config(text="")
 
         meta = self.store.get_meta()
+        o_txt, o_fg = _ollama_banner(meta, self.settings)
+        self.lbl_ollama.config(text=o_txt, fg=o_fg)
+
         tick = meta.get("sim_tick", "—")
         phase = str(meta.get("tick_phase", "") or "").strip()
         phase_s = f" · {phase}" if phase else ""
@@ -427,6 +508,7 @@ class SiteMapApp:
 def run_gui(*, config_path: Path | None = None) -> None:
     settings = load_settings(config_path)
     store = connect_world_state(settings.redis.url, settings.redis.enabled)
+    _silence_macos_imk_stderr()
     root = tk.Tk()
     SiteMapApp(root, store, settings)
     root.minsize(1240, 620)
@@ -454,6 +536,7 @@ def run_gui_live(
         )
 
     threading.Thread(target=sim_loop, name="site-zero-sim", daemon=True).start()
+    _silence_macos_imk_stderr()
     root = tk.Tk()
     SiteMapApp(root, shared, settings, shared_memory_with_sim=True)
     root.minsize(1240, 620)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import sys
 from datetime import datetime, timezone
@@ -23,14 +24,30 @@ from site_zero.seed import ensure_world_seed
 from site_zero.settings import AppSettings
 from site_zero.world_state import MemoryWorldState, WorldStateStore, connect_world_state, reset_redis_world_state
 
+_stdout_ok: bool = True
+
 
 def _ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _log_line(level: str, msg: str, **extra: Any) -> None:
+    """Print to stdout; tolerate closed pipes (e.g. ``python ... | head -N``) so the sim thread never blocks."""
+    global _stdout_ok
+    if not _stdout_ok:
+        return
     tail = f" {extra}" if extra else ""
-    print(f"[{_ts()}] [{level.upper()}] {msg}{tail}", flush=True)
+    line = f"[{_ts()}] [{level.upper()}] {msg}{tail}\n"
+    try:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+    except BrokenPipeError:
+        _stdout_ok = False
+    except OSError as exc:
+        if getattr(exc, "errno", None) == errno.EPIPE:
+            _stdout_ok = False
+        else:
+            raise
 
 
 def _agent_id_from_event(ev: dict[str, Any]) -> str | None:
@@ -103,6 +120,24 @@ def _tick_settings_for_ollama(settings: AppSettings, ollama_ok: bool) -> AppSett
     return ts
 
 
+def _write_ollama_meta(store: WorldStateStore, settings: AppSettings, *, ollama_ok: bool) -> None:
+    """Expose Ollama reachability to the GUI / Redis meta (refreshed each tick)."""
+    meta = store.get_meta()
+    meta["ollama_reachable"] = ollama_ok
+    meta["ollama_base_url"] = str(settings.ollama.base_url).rstrip("/")
+    meta["ollama_model"] = str(settings.ollama.model)
+    meta["agents_use_llm_config"] = bool(settings.agents.use_llm)
+    meta["scp079_use_llm_config"] = bool(settings.scp079.use_llm)
+    meta["ollama_narrative_config"] = bool(settings.ollama.narrative_enabled)
+    want = bool(
+        settings.agents.use_llm or settings.scp079.use_llm or settings.ollama.narrative_enabled
+    )
+    meta["ollama_any_llm_feature_config"] = want
+    meta["agent_llm_effective"] = bool(settings.agents.use_llm and ollama_ok)
+    meta["scp079_llm_effective"] = bool(settings.scp079.use_llm and ollama_ok)
+    store.set_meta(meta)
+
+
 async def run_simulation(
     settings: AppSettings,
     *,
@@ -124,21 +159,22 @@ async def run_simulation(
     _log_line("info", "Site-Zero heartbeat online", site=settings.simulation.site_id)
     tick = 0
     async with httpx.AsyncClient() as http:
-        ollama_ok = await ollama_available(http, settings.ollama.base_url)
-        if settings.agents.use_llm and ollama_ok:
+        ollama_ok_boot = await ollama_available(http, settings.ollama.base_url)
+        _write_ollama_meta(store, settings, ollama_ok=ollama_ok_boot)
+        if settings.agents.use_llm and ollama_ok_boot:
             _log_line(
                 "info",
                 "Agent policy: Ollama JSON per tick (SCP-079, D-class, SCP-173)",
                 model=settings.ollama.model,
             )
-        elif settings.agents.use_llm and not ollama_ok:
+        elif settings.agents.use_llm and not ollama_ok_boot:
             _log_line(
                 "warn",
                 "Agent LLM enabled in config but Ollama unreachable — rules-only ticks",
             )
 
         memory: VectorAgentMemory | None = None
-        if settings.memory.enabled and ollama_ok:
+        if settings.memory.enabled and ollama_ok_boot:
             memory = VectorAgentMemory(settings)
             _log_line(
                 "info",
@@ -147,13 +183,15 @@ async def run_simulation(
                 embed_model=settings.memory.embedding_model,
             )
 
-        if settings.ollama.narrative_enabled and not ollama_ok:
+        if settings.ollama.narrative_enabled and not ollama_ok_boot:
             _log_line("warn", "Ollama unreachable; narrative disabled for this session")
         elif settings.ollama.narrative_enabled:
             _log_line("info", "Ollama OK; narrative layer active", model=settings.ollama.model)
 
         while True:
             tick += 1
+            ollama_ok = await ollama_available(http, settings.ollama.base_url)
+            _write_ollama_meta(store, settings, ollama_ok=ollama_ok)
             _set_tick_progress(store, tick, "running")
             tick_settings = _tick_settings_for_ollama(settings, ollama_ok)
             perception173_dbg = render_entity_pov_context(store, "SCP-173", tick)
@@ -226,7 +264,19 @@ async def run_simulation(
                         {"tick": tick, "kind": "d_class"},
                     )
 
-            ev_scp = await dispatch_scp_ticks_except_173(store, tick, memory=memory, http=http)
+            if tick_settings.agents.use_llm:
+                _log_line(
+                    "info",
+                    f"tick {tick} D-class round finished; roster SCPs, then SCP-173 LLM (may take a while)",
+                )
+
+            ev_scp = await dispatch_scp_ticks_except_173(
+                store,
+                tick,
+                memory=memory,
+                http=http,
+                roster_recall=bool(memory and settings.memory.roster_recall),
+            )
             noise_accum.extend(ev_scp)
             for ev in ev_scp:
                 _log_line(ev.get("level", "info"), ev.get("msg", ""))

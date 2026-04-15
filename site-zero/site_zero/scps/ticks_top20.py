@@ -9,6 +9,7 @@ import math
 import random
 from typing import Any
 
+from site_zero.agents.locomotion import scp_in_room_drift, scp_joke_relocate, scp_maybe_patrol_adjacent
 from site_zero.agents.scp173 import load_all_entities
 from site_zero.physics import nearest_living_human, propagate_noise, step_toward
 from site_zero.scps.episodic_context import episodic_bias as _mb
@@ -41,6 +42,8 @@ def tick_scp_049(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
         }
     ]
     if not target:
+        events.extend(scp_maybe_patrol_adjacent(store, eid, 0.085, msg_verb="ward_round"))
+        scp_in_room_drift(store, eid, 0.22)
         return events
     ox, oy = float(ent["location"]["x"]), float(ent["location"]["y"])
     tx, ty = float(entities[target]["location"]["x"]), float(entities[target]["location"]["y"])
@@ -79,6 +82,8 @@ def tick_scp_096(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
                 break
     events = [{"level": "info", "msg": f"{eid} perceive=face_rule enraged={sv.get('enraged')}", "agent": eid}]
     if not sv.get("enraged"):
+        scp_in_room_drift(store, eid, 0.16)
+        events.extend(scp_maybe_patrol_adjacent(store, eid, 0.055, msg_verb="shamble"))
         store.set_entity(eid, ent)
         return events
     tid = sv.get("rage_target")
@@ -121,6 +126,8 @@ def tick_scp_682(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
     target = nearest_living_human(entities, eid, same_room_only=True)
     events: list[dict[str, Any]] = [{"level": "info", "msg": f"{eid} perceive=life_map hatred=high", "agent": eid}]
     if not target:
+        events.extend(scp_maybe_patrol_adjacent(store, eid, 0.065, msg_verb="tank_shift"))
+        scp_in_room_drift(store, eid, 0.14)
         return events
     ox, oy = float(ent["location"]["x"]), float(ent["location"]["y"])
     tx, ty = float(entities[target]["location"]["x"]), float(entities[target]["location"]["y"])
@@ -177,6 +184,8 @@ def tick_scp_999(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
             best_f, best = f, oid
     events: list[dict[str, Any]] = [{"level": "info", "msg": f"{eid} perceive=distress", "agent": eid}]
     if not best:
+        scp_in_room_drift(store, eid, 0.18)
+        events.extend(scp_maybe_patrol_adjacent(store, eid, 0.05, msg_verb="roll_seek"))
         return events
     ox, oy = float(ent["location"]["x"]), float(ent["location"]["y"])
     tx, ty = float(entities[best]["location"]["x"]), float(entities[best]["location"]["y"])
@@ -200,7 +209,10 @@ def tick_scp_055(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
     cur = float(rooms[rid].get("light_level", 0.5))
     jitter = random.uniform(-0.08, 0.08) + _mb(store, "055", amp=0.06)
     store.update_room(rid, {"light_level": max(0.05, min(1.0, cur + jitter))})
-    return [{"level": "info", "msg": f"{eid} act=subtle_light_shift {rid}", "agent": eid}]
+    out: list[dict[str, Any]] = [{"level": "info", "msg": f"{eid} act=subtle_light_shift {rid}", "agent": eid}]
+    out.extend(scp_maybe_patrol_adjacent(store, eid, 0.038, msg_verb="position_uncertain"))
+    scp_in_room_drift(store, eid, 0.11)
+    return out
 
 
 def tick_scp_087(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
@@ -248,7 +260,10 @@ def tick_scp_914(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
         sv["cognitive_load"] = max(0.0, float(sv.get("cognitive_load", 0)) - 0.07)
         mode = "coarse"
     store.set_entity(tid, o)
-    return [{"level": "info", "msg": f"SCP-914 act=refine_{mode} {tid}", "agent": "SCP-914"}]
+    ev: list[dict[str, Any]] = [{"level": "info", "msg": f"SCP-914 act=refine_{mode} {tid}", "agent": "SCP-914"}]
+    ev.extend(scp_maybe_patrol_adjacent(store, "SCP-914", 0.045, msg_verb="reposition"))
+    scp_in_room_drift(store, "SCP-914", 0.1)
+    return ev
 
 
 def tick_scp_2316(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
@@ -328,17 +343,30 @@ def tick_scp_3008(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
         "maze-3008",
         {"light_level": max(0.12, float(_rooms(store).get("maze-3008", {}).get("light_level", 0.5)) - dim)},
     )
-    return [{"level": "info", "msg": "SCP-3008 act=closing_shift_dim", "agent": "SCP-3008"}]
+    ev30: list[dict[str, Any]] = [{"level": "info", "msg": "SCP-3008 act=closing_shift_dim", "agent": "SCP-3008"}]
+    ev30.extend(scp_maybe_patrol_adjacent(store, "SCP-3008", 0.06, msg_verb="aisle_shift"))
+    scp_in_room_drift(store, "SCP-3008", 0.14)
+    return ev30
 
 
 def tick_scp_1730(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
     db = max(18.0, 28.0 + _mb(store, "1730", amp=10.0))
     nm = propagate_noise("site13-1730", db, room_graph_for_meta(store.get_meta()), _rooms(store))
-    return [{"level": "warn", "msg": "SCP-1730 act=structural_echo", "noise_db_by_room": nm, "agent": "SCP-1730"}]
+    ev17: list[dict[str, Any]] = [
+        {"level": "warn", "msg": "SCP-1730 act=structural_echo", "noise_db_by_room": nm, "agent": "SCP-1730"},
+    ]
+    ev17.extend(scp_maybe_patrol_adjacent(store, "SCP-1730", 0.04, msg_verb="reality_slide"))
+    scp_in_room_drift(store, "SCP-1730", 0.12)
+    return ev17
 
 
 def tick_scp_1000(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
-    return [{"level": "debug", "msg": f"SCP-1000 act=observe_forest{_rag(store)}", "agent": "SCP-1000"}]
+    ev1k: list[dict[str, Any]] = [
+        {"level": "debug", "msg": f"SCP-1000 act=observe_forest{_rag(store)}", "agent": "SCP-1000"},
+    ]
+    ev1k.extend(scp_maybe_patrol_adjacent(store, "SCP-1000", 0.075, msg_verb="perimeter_walk"))
+    scp_in_room_drift(store, "SCP-1000", 0.2)
+    return ev1k
 
 
 def tick_scp_j(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
@@ -346,7 +374,10 @@ def tick_scp_j(store: WorldStateStore, tick: int) -> list[dict[str, Any]]:
     p = max(1, int(meta.get("procrastination_ticks", 0)) + 1 + int(round(_mb(store, "J", amp=0.35))))
     meta["procrastination_ticks"] = p
     store.set_meta(meta)
-    return [{"level": "info", "msg": f"SCP-____-J act=defer_counter={p}", "agent": "SCP-____-J"}]
+    evj: list[dict[str, Any]] = [{"level": "info", "msg": f"SCP-____-J act=defer_counter={p}", "agent": "SCP-____-J"}]
+    evj.extend(scp_joke_relocate(store, "SCP-____-J", 0.028))
+    scp_in_room_drift(store, "SCP-____-J", 0.25)
+    return evj
 
 
 TICK_REGISTRY: dict[str, Any] = {

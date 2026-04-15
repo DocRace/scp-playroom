@@ -65,6 +65,10 @@ class MemorySettings(BaseModel):
     chroma_path: str = "data/chroma_site_zero"
     embedding_model: str = "nomic-embed-text"
     recall_top_k: int = 6
+    roster_recall: bool = Field(
+        default=False,
+        description="RAG recall + embed per roster SCP tick (many extra Ollama calls each tick).",
+    )
 
 
 class AppSettings(BaseModel):
@@ -115,6 +119,10 @@ def load_settings(config_path: str | Path | None = None) -> AppSettings:
         settings.memory.enabled = True
     if os.environ.get("SITE_ZERO_EMBED_MODEL"):
         settings.memory.embedding_model = os.environ["SITE_ZERO_EMBED_MODEL"]
+    if os.environ.get("SITE_ZERO_ROSTER_RECALL", "").lower() in ("1", "true", "yes"):
+        settings.memory = settings.memory.model_copy(update={"roster_recall": True})
+    if os.environ.get("SITE_ZERO_ROSTER_RECALL", "").lower() in ("0", "false", "no"):
+        settings.memory = settings.memory.model_copy(update={"roster_recall": False})
     if raw_dc := os.environ.get("SITE_ZERO_D_CLASS_LLM_MAX", "").strip():
         try:
             settings.agents = settings.agents.model_copy(

@@ -35,6 +35,18 @@ def _d_grid(i: int) -> tuple[float, float]:
     return (1.0 + col * 1.2, 1.0 + row * 1.1)
 
 
+_D_CLASS_TRAITS: tuple[str, ...] = (
+    "guarded",
+    "reckless",
+    "docile",
+    "paranoid",
+    "curious",
+    "numb",
+    "defiant",
+    "clingy",
+)
+
+
 def full_site_entities() -> dict[str, dict[str, Any]]:
     entities: dict[str, dict[str, Any]] = {}
 
@@ -50,6 +62,7 @@ def full_site_entities() -> dict[str, dict[str, Any]]:
             "location": {"room": room, "x": xy[0], "y": xy[1]},
             "facing": facing,
             "alive": True,
+            "trait": _D_CLASS_TRAITS[(i - 1) % len(_D_CLASS_TRAITS)],
             "state_variables": {
                 "fear": 0.15 + (i % 7) * 0.04,
                 "cognitive_load": 0.12 + (i % 5) * 0.03,

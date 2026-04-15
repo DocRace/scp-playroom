@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -18,6 +19,8 @@ async def dispatch_scp_ticks_except_173(
     *,
     memory: VectorAgentMemory | None = None,
     http: httpx.AsyncClient | None = None,
+    roster_recall: bool = False,
+    roster_recall_timeout: float = 45.0,
 ) -> list[dict[str, Any]]:
     """Run perceive→act handlers; optional RAG recall into meta['active_episodic'] per SCP."""
     out: list[dict[str, Any]] = []
@@ -29,9 +32,15 @@ async def dispatch_scp_ticks_except_173(
             continue
         injected = False
         try:
-            if memory is not None and http is not None:
+            if roster_recall and memory is not None and http is not None:
                 q = build_scp_recall_query(store, scp_id, tick)
-                lines = await memory.recall_lines(http, scp_id, q)
+                try:
+                    lines = await asyncio.wait_for(
+                        memory.recall_lines(http, scp_id, q),
+                        timeout=max(5.0, roster_recall_timeout),
+                    )
+                except TimeoutError:
+                    lines = []
                 block = format_memory_prompt_block(lines)
                 meta = store.get_meta()
                 if block.strip():
