@@ -711,6 +711,29 @@ with st.sidebar:
                 index=["", "balanced", "peaceful", "chaotic"].index(_settings.storyteller.force_personality),
             )
 
+            st.markdown(
+                "<div class='section-label' style='margin-top:12px'>"
+                "Advanced LLM features (slow; opt-in)</div>",
+                unsafe_allow_html=True,
+            )
+            dialogue_on = st.toggle(
+                "Dynamic dialogue (Tier 3 uses LLM-written narrative instead of template)",
+                _settings.llm.dynamic_dialogue_enabled,
+            )
+            debate_on = st.toggle(
+                "Debate Phase (multi-agent round for spotlight events — 5+ LLM calls each)",
+                _settings.llm.debate_enabled,
+            )
+            debate_thr = st.slider(
+                "Debate trigger importance",
+                0.6, 1.0, _settings.llm.debate_threshold, 0.05,
+                disabled=not debate_on,
+            )
+            llm_move_on = st.toggle(
+                "LLM-driven movement (historical figures choose tiles via LLM)",
+                _settings.llm.llm_movement_enabled,
+            )
+
             all_saved = st.form_submit_button("Save all")
 
         if all_saved:
@@ -718,7 +741,11 @@ with st.sidebar:
                 "llm": {**_settings.llm.model_dump(),
                         "tier2_provider": tier2_provider, "tier3_provider": tier3_provider,
                         "ollama_base_url": ollama_base_url,
-                        "ollama_tier2_model": t2m, "ollama_tier3_model": t3m},
+                        "ollama_tier2_model": t2m, "ollama_tier3_model": t3m,
+                        "dynamic_dialogue_enabled": dialogue_on,
+                        "debate_enabled": debate_on,
+                        "debate_threshold": debate_thr,
+                        "llm_movement_enabled": llm_move_on},
                 "memory": {**_settings.memory.model_dump(), "enabled": mem_enabled, "embedder": mem_embed},
                 "i18n": {**_settings.i18n.model_dump(), "enabled": i18n_enabled, "target_locale": i18n_target},
                 "importance": {"tier2_threshold": t2t, "tier3_threshold": t3t},

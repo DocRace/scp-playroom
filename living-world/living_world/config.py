@@ -39,6 +39,24 @@ class LLMSettings(BaseModel):
     openai_base_url: str | None = None
     openai_api_key: str | None = None
 
+    # ─── Advanced LLM-driven features (all opt-in, all more expensive) ───
+    # Dynamic dialogue: at Tier 3, LLM writes full narrative from persona+memory
+    # instead of template substitution. 1 LLM call per spotlight event.
+    dynamic_dialogue_enabled: bool = False
+
+    # Debate Phase: multi-agent round (orchestrator + N stakeholders + synth).
+    # 5-7 LLM calls per triggered event. Very rich, very slow.
+    debate_enabled: bool = False
+    debate_threshold: float = 0.75
+    debate_min_stakeholders: int = 3
+    debate_max_stakeholders: int = 5
+
+    # LLM-driven movement: historical figures ask the LLM where to go.
+    # Off by default — one LLM call per eligible tick per agent.
+    llm_movement_enabled: bool = False
+    llm_movement_hf_only: bool = True
+    llm_movement_chance: float = 0.3
+
 
 class BudgetSettings(BaseModel):
     """Daily token ceilings; router auto-downgrades when hit."""

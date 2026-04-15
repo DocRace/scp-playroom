@@ -57,11 +57,20 @@ class EnhancementRouter:
         tier2: LLMClient | None = None,
         tier3: LLMClient | None = None,
         budget: TierBudget | None = None,
+        *,
+        dialogue_generator=None,   # optional DialogueGenerator
+        debate_phase=None,         # optional DebatePhase
+        debate_threshold: float = 0.75,
+        world=None,                # required for dialogue/debate (needs tile + participants)
     ) -> None:
         self.tier2 = tier2
         self.tier3 = tier3
         self.budget = budget or TierBudget()
         self.stats = RouterStats()
+        self.dialogue_generator = dialogue_generator
+        self.debate_phase = debate_phase
+        self.debate_threshold = debate_threshold
+        self.world = world
 
     def _build_prompt(self, event: LegendEvent) -> str:
         # Structured prompt so mock clients can parse out pack/kind/body.
@@ -86,9 +95,37 @@ class EnhancementRouter:
         # Tier 3 pathway
         if event.importance >= self.TIER3_THRESHOLD and self.tier3 is not None:
             if self.budget.can_use_tier3():
-                resp = self.tier3.complete(prompt, max_tokens=512)
-                event.spotlight_rendering = resp.text
-                self.budget.record(3, resp.tokens_out)
+                text: str | None = None
+
+                # 3a. Debate Phase — highest tier, multi-agent round
+                if (
+                    self.debate_phase is not None
+                    and self.world is not None
+                    and event.importance >= self.debate_threshold
+                ):
+                    try:
+                        text = self.debate_phase.run(event, self.world)
+                    except Exception as exc:
+                        print(f"[router] debate failed: {exc}")
+
+                # 3b. Dynamic dialogue via LLM with persona + memory
+                if text is None and self.dialogue_generator is not None and self.world is not None:
+                    participants = [
+                        a for a in (self.world.get_agent(pid) for pid in event.participants)
+                        if a is not None
+                    ]
+                    try:
+                        text = self.dialogue_generator.generate(event, participants, self.world)
+                    except Exception as exc:
+                        print(f"[router] dialogue failed: {exc}")
+
+                # 3c. Plain Tier 3 rewrite — fallback
+                if text is None:
+                    resp = self.tier3.complete(prompt, max_tokens=512)
+                    text = resp.text
+                    self.budget.record(3, resp.tokens_out)
+
+                event.spotlight_rendering = text
                 self.stats.tier3 += 1
                 event.tier_used = 3
                 return event

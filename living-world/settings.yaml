@@ -6,6 +6,19 @@ llm:
   ollama_tier3_model: gemma3:4b
   ollama_timeout_seconds: 60.0
 
+  # ── Advanced LLM features (expensive; opt-in) ──
+  # Dynamic dialogue — LLM writes full narrative at Tier 3 events
+  dynamic_dialogue_enabled: false
+  # Debate Phase — multi-agent round for spotlight events (5+ LLM calls each)
+  debate_enabled: false
+  debate_threshold: 0.75
+  debate_min_stakeholders: 3
+  debate_max_stakeholders: 5
+  # LLM-driven movement — historical figures choose tiles via LLM
+  llm_movement_enabled: false
+  llm_movement_hf_only: true
+  llm_movement_chance: 0.3
+
 budget:
   tier2_tokens_per_day: 1000000
   tier3_tokens_per_day: 200000

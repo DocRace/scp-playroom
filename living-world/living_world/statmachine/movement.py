@@ -91,12 +91,18 @@ class MovementPolicy:
         base_move_prob: float = 0.08,
         hf_move_prob: float = 0.03,
         friend_pull: float = 0.35,
+        llm_advisor=None,       # optional LLMMoveAdvisor
+        llm_hf_only: bool = True,
+        llm_chance: float = 0.3,  # when LLM applies, how often to use it
     ) -> None:
         self.world = world
         self.rng = rng or random.Random()
         self.base_move_prob = base_move_prob
         self.hf_move_prob = hf_move_prob
         self.friend_pull = friend_pull
+        self.llm_advisor = llm_advisor
+        self.llm_hf_only = llm_hf_only
+        self.llm_chance = llm_chance
 
     def _candidate_tiles_weighted(self, agent) -> list[tuple[str, float]]:
         """(tile_id, weight) pairs respecting pack rules + tag affinities."""
@@ -166,13 +172,28 @@ class MovementPolicy:
             if not candidates:
                 continue
 
-            # Friend pull — overrides tile affinity with some probability
-            friend_tiles = set(self._friend_tiles(agent))
-            friend_cands = [(t, w) for t, w in candidates if t in friend_tiles]
-            if friend_cands and self.rng.random() < self.friend_pull:
-                dest = self._weighted_choice(friend_cands)
-            else:
-                dest = self._weighted_choice(candidates)
+            dest: str | None = None
+
+            # LLM advisor override — only for historical figures (if opt-in)
+            use_llm = (
+                self.llm_advisor is not None
+                and (not self.llm_hf_only or agent.is_historical_figure)
+                and self.rng.random() < self.llm_chance
+            )
+            if use_llm:
+                try:
+                    dest = self.llm_advisor.suggest(agent, self.world, candidates)
+                except Exception:
+                    dest = None
+
+            if dest is None:
+                # Friend pull — overrides tile affinity with some probability
+                friend_tiles = set(self._friend_tiles(agent))
+                friend_cands = [(t, w) for t, w in candidates if t in friend_tiles]
+                if friend_cands and self.rng.random() < self.friend_pull:
+                    dest = self._weighted_choice(friend_cands)
+                else:
+                    dest = self._weighted_choice(candidates)
 
             from_tile = agent.current_tile
             self._move_agent(agent, dest)

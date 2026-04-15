@@ -9,9 +9,12 @@ from living_world.config import Settings
 from living_world.core.world import World
 from living_world.llm import EnhancementRouter, MockTier2Client, MockTier3Client, OllamaClient, TierBudget
 from living_world.llm.base import LLMClient
+from living_world.llm.dialogue import DialogueGenerator
+from living_world.llm.move_advisor import LLMMoveAdvisor
 from living_world.memory import AgentMemoryStore, MockEmbedder, OllamaEmbedder
 from living_world.persistence import MemoryRepository, PostgresRepository
 from living_world.persistence.repository import Repository
+from living_world.statmachine.debate import DebatePhase
 from living_world.statmachine.historical_figures import PromotionConfig
 from living_world.tick_loop import TickEngine
 from living_world.world_pack import load_all_packs
@@ -56,7 +59,26 @@ def build_router(settings: Settings) -> EnhancementRouter:
         tier2_tokens_limit=settings.budget.tier2_tokens_per_day,
         tier3_tokens_limit=settings.budget.tier3_tokens_per_day,
     )
-    router = EnhancementRouter(tier2=t2, tier3=t3, budget=budget)
+    # Optional advanced LLM components
+    dialogue = None
+    if settings.llm.dynamic_dialogue_enabled and t3 is not None:
+        dialogue = DialogueGenerator(t3)
+
+    debate = None
+    if settings.llm.debate_enabled and t3 is not None and t2 is not None:
+        debate = DebatePhase(
+            orchestrator=t3, worker=t2,
+            min_stakeholders=settings.llm.debate_min_stakeholders,
+            max_stakeholders=settings.llm.debate_max_stakeholders,
+        )
+
+    router = EnhancementRouter(
+        tier2=t2, tier3=t3, budget=budget,
+        dialogue_generator=dialogue,
+        debate_phase=debate,
+        debate_threshold=settings.llm.debate_threshold,
+        # world is set later by make_engine after bootstrap
+    )
     router.TIER2_THRESHOLD = settings.importance.tier2_threshold
     router.TIER3_THRESHOLD = settings.importance.tier3_threshold
     return router
@@ -95,6 +117,7 @@ def build_memory_store(settings: Settings) -> AgentMemoryStore | None:
 
 def make_engine(world: World, loaded: list, settings: Settings, seed: int, repository: Repository | None = None) -> TickEngine:
     router = build_router(settings)
+    router.world = world  # router needs world ref for dialogue/debate
     memory = build_memory_store(settings)
     engine = TickEngine(
         world, loaded, seed=seed, router=router,
@@ -103,6 +126,19 @@ def make_engine(world: World, loaded: list, settings: Settings, seed: int, repos
         snapshot_every_ticks=settings.persistence.snapshot_every_ticks,
         reflect_every_ticks=settings.memory.reflect_every_ticks,
     )
+    # Optional LLM-driven movement advisor
+    if settings.llm.llm_movement_enabled:
+        t2 = build_tier_client(
+            settings.llm.tier2_provider,
+            ollama_model=settings.llm.ollama_tier2_model,
+            ollama_url=settings.llm.ollama_base_url,
+            timeout=settings.llm.ollama_timeout_seconds,
+            declared_tier=2,
+        )
+        if t2 is not None:
+            engine.movement.llm_advisor = LLMMoveAdvisor(t2)
+            engine.movement.llm_hf_only = settings.llm.llm_movement_hf_only
+            engine.movement.llm_chance = settings.llm.llm_movement_chance
     hf_cfg = settings.historical_figures
     engine.hf_registry.config = PromotionConfig(
         spotlight_threshold=hf_cfg.spotlight_threshold,
