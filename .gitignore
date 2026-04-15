@@ -1,1 +1,16 @@
 .DS_Store
+docs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+
+# living-world runtime
+living-world/.venv/
+living-world/__pycache__/
+living-world/**/__pycache__/
+living-world/.pytest_cache/
+living-world/*.egg-info/

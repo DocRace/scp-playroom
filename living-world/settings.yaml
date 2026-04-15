@@ -1,0 +1,57 @@
+llm:
+  tier2_provider: mock        # none | mock | ollama
+  tier3_provider: mock        # none | mock | ollama
+  ollama_base_url: http://localhost:11434
+  ollama_tier2_model: gemma3:4b
+  ollama_tier3_model: gemma3:4b
+  ollama_timeout_seconds: 60.0
+
+budget:
+  tier2_tokens_per_day: 1000000
+  tier3_tokens_per_day: 200000
+
+importance:
+  tier2_threshold: 0.35
+  tier3_threshold: 0.65
+
+historical_figures:
+  spotlight_threshold: 0.6
+  notable_threshold: 0.3
+  notable_count_for_promotion: 3
+  strong_relationship_affinity: 70
+  inactivity_days_for_demotion: 30
+
+storyteller:
+  force_personality: ""        # "" | balanced | peaceful | chaotic
+  max_events_per_day_override: null
+  tension_target_override: null
+
+simulation:
+  default_packs: [scp, liaozhai, cthulhu]
+  default_days: 30
+  default_seed: 42
+  packs_dir: world_packs
+
+memory:
+  enabled: false               # true enables per-agent episodic memory + reflection
+  embedder: mock               # none | mock | ollama (nomic-embed-text recommended)
+  ollama_embed_model: nomic-embed-text
+  reflect_every_ticks: 7       # how often to fold raw memories into reflections
+  recall_top_k: 5
+
+i18n:
+  enabled: false               # true = translate LLM output to target_locale
+  target_locale: zh            # en | zh | ja
+  provider: ollama             # noop | ollama (reuses gemma3:4b for translation)
+  ollama_translate_model: gemma3:4b
+  cache_size: 4096
+
+persistence:
+  backend: memory              # memory | postgres
+  postgres_dsn: postgresql://lw:lw_dev_only@localhost:5433/living_world
+  snapshot_every_ticks: 10     # snapshot full world state every N ticks
+
+dashboard:
+  host: localhost
+  port: 8501
+  page_title: Living World — Stage A

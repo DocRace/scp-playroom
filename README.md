@@ -1,100 +1,66 @@
 # scp-playroom
 
-Experimental **multi-agent containment simulation** (“Site-Zero”): rule-based and optional LLM-driven agents, Redis-backed world state, and a small live map GUI.
+Research sandbox for multi-agent world simulation.
 
-**Fiction only** — simplified mechanics for a local lab toy, not canon SCP Foundation material.
+**Fiction only** — a coding playground for studying emergent behavior of LLM-anchored agent societies. Not canon for any of the fictional universes it draws from.
 
-## Repository layout
+---
 
-| Path | Description |
-| ----------- | ------------------------------------------------ |
-| `site-zero` | Python package `site_zero`, CLI, `config.yaml`   |
+## What's here
 
-## Requirements
+The repo contains **two independent projects**:
 
-- **Python** 3.11+
-- **Redis** (Redis Stack JSON recommended) — for `--gui` while the sim runs in another terminal  
-- **Tcl/Tk** — required for `--gui` / `--live` (see **Troubleshooting** if `No module named '_tkinter'`)  
-- **Ollama** (optional) — LLM policies for SCP-079, D-class, SCP-173; rules-only mode works without it
+### 1. `living-world/` — current focus
+Stage A MVP of the main project: a no-player, auto-running virtual world simulator.
+Three worldviews run simultaneously: SCP Foundation · Cthulhu Mythos · Liaozhai Zhiyi.
 
-## Quick start
+**Start here:**
+```bash
+cd living-world
+./lw
+```
+
+See [`living-world/README.md`](living-world/README.md) for full details.
+
+### 2. `site-zero/` — legacy
+Earlier single-pack SCP-Foundation prototype with Tkinter map GUI, Ollama + Redis backend.
+Superseded by `living-world/` but kept as reference.
 
 ```bash
 cd site-zero
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+python -m venv .venv && source .venv/bin/activate
 pip install -e .
+python -m site_zero              # requires Redis + Ollama
 ```
 
-### Redis (Docker)
+See `site-zero/README.md` for details (Tcl/Tk required for map).
 
-```bash
-cd site-zero
-docker compose up -d
-```
+---
 
-Default URL matches `config.yaml`: `redis://localhost:6379/0`.
+## Design documents
 
-### Run the simulation
+High-level product / architecture / roadmap docs live in `docs/` (gitignored; team-only):
 
-From `site-zero` (with Redis up and `redis.enabled: true` in `config.yaml`):
+- `docs/product-direction.md` — Stage A → D roadmap, three-world rationale
+- `docs/architecture.md` — system design, tier routing, data flow
+- `docs/stat-machine-design.md` — importance scoring, tier 1/2/3 policy
+- `docs/next-steps.md` — non-blocking work streams
+- `docs/tech-glossary.md` — terminology reference
+- `docs/flow-loops.md` — tick + event flow diagrams
+- `docs/mvp-roadmap.md` — feature sequencing
+- `docs/lbs-infrastructure.md` — mobile/LBS deployment notes (future)
 
-```bash
-python -m site_zero
-```
+---
 
-Useful flags:
+## Philosophy
 
-| Flag            | Purpose |
-| --------------- | ---------------------------------------------------- |
-| `--ticks N`     | Stop after N ticks                                   |
-| `--memory`      | In-process store only (no Redis) — **GUI won’t sync** |
-| `--rules-only`  | No Ollama; deterministic rules                       |
-| `--gui`         | Open Tkinter live map (needs Redis + running sim)    |
-| `--live`        | Sim + map in one process (shared memory; no Redis)   |
-| `--site minimal`| Small 173 sandbox instead of full site               |
+- **Content is data, engine is code.** YAML packs define worlds; Python runs them.
+- **LLMs are optional flavor.** Pure rule-based Tier 1 simulation runs indefinitely at zero token cost; higher tiers light up narrative at moments of importance.
+- **Physical logic before narrative logic.** An SCP-173 unobserved in a room with a D-class WILL produce a fatality — mechanically, not because a storyteller chose to.
+- **Emergent stories, not scripted ones.** Storytellers propose candidates; stat machines resolve them; you discover what happened by reading the Chronicle.
 
-Examples:
+---
 
-```bash
-python -m site_zero --rules-only --ticks 100
-python -m site_zero --live                   # sim + map; needs Tcl/Tk (see below)
-python -m site_zero --gui                    # second terminal, while sim runs (Redis)
-```
+## License
 
-### Configuration
-
-Edit `site-zero/config.yaml`, or override with environment variables, for example:
-
-- `SITE_ZERO_REDIS_URL`, `SITE_ZERO_REDIS_ENABLED`
-- `OLLAMA_BASE_URL`, `SITE_ZERO_MODEL`
-- `SITE_ZERO_SITE_PRESET` — `full` or `minimal`
-- `SITE_ZERO_AGENT_LLM` — enable/disable agent LLM calls
-
-## What it simulates (high level)
-
-- **Full preset**: hub-and-spoke site graph, many rooms, a roster of iconic SCP-style entities with simple per-tick rules, ~20 D-class subjects, SCP-079 site controls, SCP-173 with line-of-sight physics.
-- **Minimal preset**: legacy two-room style sandbox for SCP-173.
-- **Live map**: `--live` (in-process) or `--gui` + Redis; shows entity positions and last action lines each tick.
-
-## Troubleshooting
-
-### `ModuleNotFoundError: No module named '_tkinter'`
-
-Homebrew’s `python@3.13` often ships without Tk. Install the matching `python-tk` formula and **recreate the venv** with that interpreter, for example:
-
-```bash
-brew install python-tk@3.13
-cd site-zero
-rm -rf .venv
-"$(brew --prefix python@3.13)/bin/python3.13" -m venv .venv
-source .venv/bin/activate
-pip install -e .
-python -m site_zero --live
-```
-
-Alternatively use the installer from [python.org](https://www.python.org/downloads/), which includes Tk.
-
-## License / attribution
-
-SCP-inspired themes are used under community norms for transformative fan works; this repo is an independent coding exercise, not endorsed by SCP Wiki staff.
+MIT for all code. Content packs follow their source licenses (see per-pack notes in `living-world/world_packs/`).
